@@ -1,0 +1,11 @@
+/datasets/data/
+*.pkl
+/runs/
+/weights/
+/weights_multi_gpu/
+/logdirs/
+.idea
+*.py[cod]
+*.avi
+tmp.py
+
