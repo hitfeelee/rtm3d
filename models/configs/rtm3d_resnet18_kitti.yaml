@@ -15,7 +15,7 @@ SOLVER:
   WARMUP_ITERS: 100
   MAX_EPOCH: 500
 DETECTOR:
-  CHECKPOINT: './models/pretrained/RESNET-18/model_best.pt'
+  CHECKPOINT: './models/pretrained/rtm3d/RESNET-18/model_best.pt'
   SCORE_THRESH: 0.4
   TOPK_CANDIDATES: 100
   dim_ref:
