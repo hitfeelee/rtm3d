@@ -18,6 +18,6 @@ SOLVER:
   MAX_EPOCH: 300
   LOAD_SOLVER: True
 DETECTOR:
-  CHECKPOINT: './models/pretrained/RESNET-18/model_best.pt'
+  CHECKPOINT: './models/pretrained/smoke/RESNET-18/model_best.pt'
   SCORE_THRESH: 0.4
   TOPK_CANDIDATES: 100
