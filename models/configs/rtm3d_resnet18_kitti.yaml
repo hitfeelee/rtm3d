@@ -1,0 +1,23 @@
+INPUT_SIZE: (1280, 1280)
+DEVICE: 'cuda'
+BATCH_SIZE: 16
+TRAINING:
+  #CHECKPOINT_FILE: '/home/wm/.cache/torch/hub/checkpoints/resnet18-5c106cde.pth'
+  CHECKPOINT_FILE: './models/pretrained/RESNET-18/model_best.pt'
+  CHECKPOINT_MODE: 'resume'
+  WEIGHTS: './weights_multi_gpu'
+  W_V_OFF: 1.
+MODEL:
+  BACKBONE: 'RESNET-18'
+  KFNs: ['layer1', 'layer2', 'layer3', 'layer4']
+SOLVER:
+  BASE_LR: 0.0002
+  STEPS: (3000, 5000)
+  WARMUP_FACTOR: 1.
+  WARMUP_ITERS: 1
+  MAX_EPOCH: 300
+  LOAD_SOLVER: True
+DETECTOR:
+  CHECKPOINT: './models/pretrained/RESNET-18/model_best.pt'
+  SCORE_THRESH: 0.4
+  TOPK_CANDIDATES: 100

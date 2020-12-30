@@ -1,0 +1,17 @@
+INPUT_SIZE: (1280, 1280)
+DEVICE: 'cuda'
+TRAINING:
+  CHECKPOINT_FILE: '/home/wm/.torch/models/dla34-ba72cf86.pth'
+  CHECKPOINT_MODE: 'resume'
+  WEIGHTS: './weights_multi_gpu'
+BATCH_SIZE: 16
+SOLVER:
+  BASE_LR: 0.001
+  STEPS: (80000, 100000)
+  WARMUP_FACTOR: 0.01
+  WARMUP_ITERS: 100
+  MAX_EPOCH: 500
+DETECTOR:
+  CHECKPOINT: './models/pretrained/DLA-34/model_best.pt'
+  SCORE_THRESH: 0.4
+  TOPK_CANDIDATES: 100
