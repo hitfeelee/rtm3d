@@ -7,5 +7,6 @@
 .idea
 *.py[cod]
 *.avi
+*.pt
 tmp.py
 
