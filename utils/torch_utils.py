@@ -203,9 +203,10 @@ def make_conv_level(in_channels, out_channels, kernel_size=3, num_convs=1, norm_
 
     return nn.Sequential(*modules)
 
+
 def reduce_tensor(tensor, world_size):
     rt = tensor.clone()
-    dist.all_reduce(rt, op=dist.reduce_op.SUM)
+    dist.all_reduce(rt, op=dist.ReduceOp.SUM)
     rt /= world_size
     return rt
 

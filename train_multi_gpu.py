@@ -93,17 +93,19 @@ def setup(gpu_idx, configs):
     if len(configs.TRAINING.CHECKPOINT_FILE) > 0:
         ckpt = checkpointer.load(configs.TRAINING.CHECKPOINT_FILE,
                                  use_latest=(configs.TRAINING.CHECKPOINT_MODE != 'pretrained'),
-                                 load_solver=configs.SOLVER.LOAD_SOLVER)
+                                 load_solver=False)
         if 'epoch' in ckpt and configs.TRAINING.CHECKPOINT_MODE == 'resume':
             configs.start_epoch = ckpt['epoch'] + 1
         if 'min_loss' in ckpt and configs.TRAINING.CHECKPOINT_MODE == 'resume':
             configs.min_loss = ckpt['min_loss']
+        del ckpt
     # Data Parallel
     model = model_factory.make_data_parallel(model, configs)
     solver = Solver(model, configs)
     checkpointer.set_solver(solver)
-    checkpointer.load_solver(ckpt)
-    del ckpt
+    if configs.TRAINING.CHECKPOINT_MODE == 'resume' and configs.SOLVER.LOAD_SOLVER:
+        checkpointer.load_solver_multi_gpu(configs.TRAINING.CHECKPOINT_FILE, use_latest=True)
+
     rtm3d_loss = RTM3DLoss(configs)
 
     if configs.is_master_node:
@@ -137,7 +139,7 @@ def test_epoch(model, dataloader, rtm3d_loss, configs):
     nb = len(dataloader)
     model.eval()
     pbar = tqdm.tqdm(enumerate(dataloader), total=nb)  # progress bar
-    mloss = torch.tensor(0, dtype=torch.float32, device=configs.DEVICE)
+    mloss = 0
     num = 0
     for i, (imgs, targets, paths, _) in pbar:  # batch -------------------------------------------------------------
         with torch.no_grad():
@@ -150,14 +152,18 @@ def test_epoch(model, dataloader, rtm3d_loss, configs):
             NKs = [None] * Bs
             for i in range(Bs):
                 NKs[i] = Ks[img_ids == i][0:1, :]
-            params.add_field('K', torch.cat(NKs, dim=0))
-            pred = model(imgs, targets=params)[1]
+            NKs = torch.cat(NKs, dim=0)
+            pred = model(imgs, Ks=NKs)[1]
             loss, loss_items = rtm3d_loss(pred, targets)
             if not torch.isfinite(loss):
                 print('WARNING: non-finite loss, ending training ', loss_items)
                 return
             batch_size = imgs.shape[0]
-            mloss += (loss * batch_size)
+            if configs.distributed:
+                reduced_loss = torch_utils.reduce_tensor(loss.data, configs.world_size)
+            else:
+                reduced_loss = loss.data
+            mloss += (reduced_loss.cpu().item() * batch_size)
             num += batch_size
 
     print('test loss: %s' % (mloss / num))
@@ -172,12 +178,12 @@ def train_epoch(model, dataloader, solver, rtm3d_loss, configs, tb_writer, epoch
     if configs.distributed:
         train_sampler.set_epoch(epoch)
     if configs.is_master_node:
-        print(('\n' + '%10s' * 11) %
-              ('Epoch', 'gpu_mem', 'MKF', 'VFM', 'M_OFF', 'DIM', 'DEPTH', 'ORIENT', 'total', 'targets', 'lr'))
+        print(('\n' + '%10s' * 10) %
+              ('Epoch', 'gpu_mem', 'MKF', 'M_OFF', 'DIM', 'DEPTH', 'ORIENT', 'total', 'targets', 'lr'))
         pbar = tqdm.tqdm(enumerate(train_dataloader), total=nb)  # progress bar
     else:
         pbar = enumerate(train_dataloader)
-    mloss = torch.zeros((7,), dtype=torch.float32, device=configs.DEVICE)
+    mloss = torch.zeros((6,), dtype=torch.float32, device=configs.DEVICE)
     time1 = time.time()
     for i, (imgs, targets, paths, _) in pbar:  # batch -------------------------------------------------------------
         imgs = imgs.to(configs.DEVICE)
@@ -194,21 +200,26 @@ def train_epoch(model, dataloader, solver, rtm3d_loss, configs, tb_writer, epoch
             mloss = (mloss + loss_items) / 2
         else:
             mloss = loss_items
-        solver.step(loss)
+        # solver.step(loss)
+        # print(loss)
         if configs.distributed:
             reduced_loss = torch_utils.reduce_tensor(loss.data, configs.world_size)
         else:
             reduced_loss = loss.data
+        loss.data = reduced_loss.data
+        solver.step(loss)
+        # print(reduced_loss)
+
         if configs.is_master_node:
             mem = '%.3gG' % (torch.cuda.memory_cached() / 1E9 if torch.cuda.is_available() else 0)  # (GB)
             mask = targets.get_field('mask')
-            s = ('%10s' * 2 + '%10.4g' * 9) % (
+            s = ('%10s' * 2 + '%10.4g' * 8) % (
                 '%g/%g' % (epoch, epochs - 1), mem, *mloss, mask.shape[0], solver.learn_rate)
             pbar.set_description(s)
 
             # write tensorboard
             if tb_writer is not None:
-                Tags = ['MKF', 'VFM', 'M_OFF', 'DIM', 'DEPTH', 'ORIENT', 'total']
+                Tags = ['MKF', 'M_OFF', 'DIM', 'DEPTH', 'ORIENT', 'total']
                 for x, tag in zip(list(mloss), Tags):
                     tb_writer.add_scalar('loss/' + tag, x, epoch * nb + i)
         time1 = time.time()
@@ -228,7 +239,7 @@ def train(model, checkpointer, dataloader, solver, rtm3d_loss, configs, tb_write
             test_loss = test_epoch(model, test_dataloader, rtm3d_loss, configs)
             if configs.is_master_node and configs.min_loss > test_loss:
                 flg = True
-                configs.min_loss = test_loss.cpu().item()
+                configs.min_loss = test_loss
         arguments['epoch'] = epoch + 1
         if configs.is_master_node:
             checkpointer.save(model_name.format(epoch + 1), **arguments)

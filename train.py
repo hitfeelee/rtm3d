@@ -75,8 +75,8 @@ def test_epoch(model, dataloader, rtm3d_loss, cfg):
             NKs = [None] * Bs
             for i in range(Bs):
                 NKs[i] = Ks[img_ids == i][0:1, :]
-            params.add_field('K', torch.cat(NKs, dim=0))
-            pred = model(imgs, targets=params)[1]
+            NKs = torch.cat(NKs, dim=0)
+            pred = model(imgs, Ks=NKs)[1]
             loss, loss_items = rtm3d_loss(pred, targets)
             if not torch.isfinite(loss):
                 print('WARNING: non-finite loss, ending training ', loss_items)
@@ -92,11 +92,11 @@ import time
 
 
 def train_epoch(model, dataloader, solver, rtm3d_loss, cfg, tb_writer, epoch):
-    print(('\n' + '%10s' * 11) % ('Epoch', 'gpu_mem', 'MKF', 'VFM', 'M_OFF', 'DIM', 'DEPTH', 'ORIENT', 'total', 'targets', 'lr'))
+    print(('\n' + '%10s' * 10) % ('Epoch', 'gpu_mem', 'MKF', 'M_OFF', 'DIM', 'DEPTH', 'ORIENT', 'total', 'targets', 'lr'))
     nb = len(dataloader)
     model.train()
     pbar = tqdm.tqdm(enumerate(dataloader), total=nb)  # progress bar
-    mloss = torch.zeros((7,), dtype=torch.float32, device=cfg.DEVICE)
+    mloss = torch.zeros((6,), dtype=torch.float32, device=cfg.DEVICE)
     epochs = cfg.SOLVER.MAX_EPOCH
     for i, (imgs, targets, paths, _) in pbar:  # batch -------------------------------------------------------------
         imgs = imgs.to(cfg.DEVICE)
@@ -116,12 +116,12 @@ def train_epoch(model, dataloader, solver, rtm3d_loss, cfg, tb_writer, epoch):
 
         mem = '%.3gG' % (torch.cuda.memory_cached() / 1E9 if torch.cuda.is_available() else 0)  # (GB)
         mask = targets.get_field('mask')
-        s = ('%10s' * 2 + '%10.4g' * 9) % (
+        s = ('%10s' * 2 + '%10.4g' * 8) % (
             '%g/%g' % (epoch, epochs - 1), mem, *mloss, mask.shape[0], solver.learn_rate)
         pbar.set_description(s)
 
         # write tensorboard
-        Tags = ['MKF', 'VFM', 'M_OFF', 'DIM', 'DEPTH', 'ORIENT', 'total']
+        Tags = ['MKF', 'M_OFF', 'DIM', 'DEPTH', 'ORIENT', 'total']
         for x, tag in zip(list(mloss), Tags):
             tb_writer.add_scalar('loss/' + tag, x, epoch * nb + i)
 

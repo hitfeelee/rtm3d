@@ -20,14 +20,9 @@ class Model(nn.Module):
         torch_utils.initialize_weights(self)
 
     def forward(self, x, Ks=None):
-        t1 = time.time()
         x = self.backbone(x)
-        t2 = time.time()
         x = self.kfpn_fusion(x)
-        t3 = time.time()
         pred_logits = self.detect_header(x)
-        t4 = time.time()
-        print('time:' + ' %6g' * 3 % (t2 - t1, t3 - t2, t4 - t3))
         if self.training or self.export:
             return pred_logits
         else:
@@ -35,7 +30,7 @@ class Model(nn.Module):
 
     def inference(self, pred_logits, Ks):
         main_kf_logits = pred_logits[0]
-        offset_fr_main_logits, main_offset_kf_logits, pred3d_logits = pred_logits[1:]
+        regress_logits = pred_logits[1]
         Bs = main_kf_logits.shape[0]
         results = [None] * Bs
         for i in range(Bs):  # process per image
@@ -45,24 +40,20 @@ class Model(nn.Module):
             if len(clses_i) == 0:
                 continue
             K_i = Ks[i:i+1].repeat(len(clses_i), 1).view(-1, 3, 3)
-            offsets_fr_main_i = self._obtain_offset_fr_main(offset_fr_main_logits[i], m_projs_i)
-            m_projs_offset_i = main_offset_kf_logits[i][:, m_projs_i[1].long(), m_projs_i[0].long()].sigmoid_()
+
+            m_projs_offset_i = regress_logits[i][:2, m_projs_i[1].long(), m_projs_i[0].long()].sigmoid_()
             m_projs_i = torch.cat([m_projs_i[0].unsqueeze(-1), m_projs_i[1].unsqueeze(-1)], dim=-1)
             m_projs_offset_i = torch.cat([m_projs_offset_i[0].unsqueeze(-1), m_projs_offset_i[1].unsqueeze(-1)], dim=-1)
             pred_dims_i, pred_locs_i, pred_rys_i, pred_alpha_i = self.smoke_encoder.decode_smoke_pred3d_logits_eval(
-                i, m_projs_i.long(), m_projs_offset_i, clses_i, pred3d_logits, K_i)
+                i, m_projs_i.long(), m_projs_offset_i, clses_i, regress_logits[:, 2:, :, :], K_i)
 
             m_projs_i += m_projs_offset_i
-            v_projs_i = offsets_fr_main_i.permute(1, 0, 2).contiguous() + m_projs_i.view(-1, 1, 2)
+
             # m_projs_i *= self.config.MODEL.DOWN_SAMPLE  # (N, 2)
-            v_projs_i *= self.config.MODEL.DOWN_SAMPLE  # (N, 8, 2)
-            oc_min = torch.min(v_projs_i, dim=1)[0]
-            oc_max = torch.max(v_projs_i, dim=1)[0]
-            bboxes_2d_i = torch.cat([oc_min, oc_max], dim=-1)
 
             result = torch.cat([
-                clses_i.view(-1, 1), pred_alpha_i.view(-1, 1), bboxes_2d_i, pred_dims_i, pred_locs_i,
-                pred_rys_i.view(-1, 1), m_scores_i.view(-1, 1), v_projs_i.view(-1, 16)
+                clses_i.view(-1, 1), pred_alpha_i.view(-1, 1), pred_dims_i, pred_locs_i,
+                pred_rys_i.view(-1, 1), m_scores_i.view(-1, 1)
             ], dim=1)
             results[i] = result
 

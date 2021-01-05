@@ -167,7 +167,9 @@ class RTM3DLoss(nn.Module):
     def __call__(self, pred_logits, targets):
         # prediction logits
         m_hm_pred = pred_logits[0]
-        ver_coor_pred, m_off_pred, pred3d_logits = pred_logits[1:]
+        regress_logits = pred_logits[1]
+        m_off_pred = regress_logits[:, :2, :, :]
+        pred3d_logits = regress_logits[:, 2:, :, :]
 
         # ground truth targets
         m_hm = targets.get_field('m_hm')
@@ -191,18 +193,6 @@ class RTM3DLoss(nn.Module):
                                      m_projs[m_valid][:, 0]].sigmoid()
         loss_main_offset = F.l1_loss(pos_main_offset, m_offs[m_valid], reduction='mean')
 
-        # offset from main loss and vertex proj offset loss
-
-        v_valid = v_mask[m_valid].view(-1) # (N, num_vc) -> (Nxnum_vc, )
-        # offset from main loss
-        ver_coor_pred = ver_coor_pred.permute(0, 2, 3, 1).contiguous()
-        ver_coor_pred = ver_coor_pred[img_id[m_valid],
-                                      m_projs[m_valid][:, 1],
-                                      m_projs[m_valid][:, 0]].view(-1, 2)
-
-        loss_ver_coor = F.l1_loss(ver_coor_pred[v_valid],
-                                  ver_coor[m_valid].view(-1, 2)[v_valid], reduction='mean')
-
         # 3d properties loss
         codes = self._smode_ecoder.encode_smoke_pred3d_and_targets(pred3d_logits, targets)
         pred_dims, pred_depths, pred_orients = codes[:3]
@@ -215,14 +205,12 @@ class RTM3DLoss(nn.Module):
 
         loss_main_kf *= self._config.TRAINING.W_MKF
         loss_main_offset *= self._config.TRAINING.W_M_OFF
-        loss_ver_coor *= self._config.TRAINING.W_VFM
         loss_dim *= self._config.TRAINING.W_V_OFF
         loss_depth *= self._config.TRAINING.W_V_OFF
         loss_orient *= self._config.TRAINING.W_V_OFF
 
-        loss = loss_main_kf + loss_ver_coor + loss_main_offset + loss_dim + loss_depth + loss_orient
-        return loss, torch.tensor([loss_main_kf, loss_ver_coor,
-                                   loss_main_offset, loss_dim, loss_depth, loss_orient, loss],
+        loss = loss_main_kf + loss_main_offset + loss_dim + loss_depth + loss_orient
+        return loss, torch.tensor([loss_main_kf, loss_main_offset, loss_dim, loss_depth, loss_orient, loss],
                                   device=loss.device).detach()
 
 

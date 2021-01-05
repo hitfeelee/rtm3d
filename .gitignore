@@ -4,6 +4,7 @@
 /weights/
 /weights_multi_gpu/
 /logdirs/
+/models/pretrained
 .idea
 *.py[cod]
 *.avi
