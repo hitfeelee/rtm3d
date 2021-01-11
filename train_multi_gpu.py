@@ -138,7 +138,11 @@ def main_worker(gpu_idx, configs):
 def test_epoch(model, dataloader, rtm3d_loss, configs):
     nb = len(dataloader)
     model.eval()
-    pbar = tqdm.tqdm(enumerate(dataloader), total=nb)  # progress bar
+
+    if configs.is_master_node:
+        pbar = tqdm.tqdm(enumerate(dataloader), total=nb)  # progress bar
+    else:
+        pbar = enumerate(dataloader)
     mloss = 0
     num = 0
     for i, (imgs, targets, paths, _) in pbar:  # batch -------------------------------------------------------------
@@ -166,7 +170,8 @@ def test_epoch(model, dataloader, rtm3d_loss, configs):
             mloss += (reduced_loss.cpu().item() * batch_size)
             num += batch_size
 
-    print('test loss: %s' % (mloss / num))
+    if configs.is_master_node:
+        print('The loss in test dataset: %s' % (mloss / num))
     return mloss / num
 
 

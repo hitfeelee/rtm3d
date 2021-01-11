@@ -205,11 +205,11 @@ class RTM3DLoss(nn.Module):
 
         loss_main_kf *= self._config.TRAINING.W_MKF
         loss_main_offset *= self._config.TRAINING.W_M_OFF
-        loss_dim *= self._config.TRAINING.W_V_OFF
-        loss_depth *= self._config.TRAINING.W_V_OFF
-        loss_orient *= self._config.TRAINING.W_V_OFF
+        loss_dim *= self._config.TRAINING.W_V_DIM
+        loss_depth *= self._config.TRAINING.W_DEPTH
+        loss_orient *= self._config.TRAINING.W_ORIENT
 
-        loss = loss_main_kf + loss_main_offset + loss_dim + loss_depth + loss_orient
+        loss = loss_main_kf + (loss_main_offset + loss_dim + loss_depth + loss_orient) * 1.
         return loss, torch.tensor([loss_main_kf, loss_main_offset, loss_dim, loss_depth, loss_orient, loss],
                                   device=loss.device).detach()
 

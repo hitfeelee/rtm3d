@@ -126,7 +126,7 @@ def detect(model, dataset, cfg):
         kf = cv2.resize(kf, (kf.shape[1] // 2, kf.shape[0] // 2))
         cv2.imshow('rtm3d_detect', kf)
         # videowriter.write(kf)
-        key = cv2.waitKey(100)
+        key = cv2.waitKey(1000)
         if key & 0xff == ord('q'):
             break
     cv2.destroyAllWindows()

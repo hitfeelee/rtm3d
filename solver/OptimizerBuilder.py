@@ -32,7 +32,7 @@ def build_optimizer(cfg, model: torch.nn.Module) -> torch.optim.Optimizer:
         params += [{"params": [value], "lr": lr, "weight_decay": weight_decay}]
 
     # optimizer = torch.optim.SGD(params, lr, momentum=cfg.SOLVER.MOMENTUM)
-    optimizer = torch.optim.Adamax(params, lr=lr, weight_decay=1.e-4)
+    optimizer = torch.optim.AdamW(params, lr=lr, weight_decay=1.e-4)
     return optimizer
 
 
