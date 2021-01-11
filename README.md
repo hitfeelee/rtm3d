@@ -1,7 +1,7 @@
 # rtm3d
 Perform 3D object detection base on anchor-free. rtm3d on main branch , smoke on smoke branch.
 There are many changes both rtm3d and smoke, and main keypoint heatmap in smoke base on rtm3d. 
-Train smoke also base on rtm3d. But multi gpu training in smoke exits bug now.
+Train smoke also base on rtm3d. And now multi gpu training in this branch has supported.
 
 
 ## Quick Start
@@ -59,8 +59,8 @@ Please place it as following:
      python export_onnx.py --model-config ./models/configs/rtm3d_resnet18_kitti.yaml
     
 ## Pretrained Model
-We provide a set of trained models available for download in the  [Pretrained Model](https://pan.baidu.com/s/1G7pI7Gl-UROfNzyMxnWGtg).
-提取码: dxv4
+We provide a set of trained models available for download in the  [Pretrained Model](https://pan.baidu.com/s/1oetT70cTJbwXgPjVdpUQ0A).
+提取码: qu2u
 
 ## License
 MIT
