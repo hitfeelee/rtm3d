@@ -72,7 +72,7 @@ def cv_draw_bboxes_3d(img, bboxes_3d, label_map=None, color_map=KITTI_COLOR_MAP)
     return img
 
 
-def cv_draw_bboxes_3d_kitti(img, bboxes_3d, label_map=None, color_map=KITTI_COLOR_MAP):
+def cv_draw_bboxes_3d_kitti(img, bboxes_3d, label_map=None, color_map=KITTI_COLOR_MAP, draw_bbox2d=False):
     bboxes_3d_array = bboxes_3d.numpy()
     classes = bboxes_3d_array.get_field('class').astype(np.int)
     N = len(classes)
@@ -86,7 +86,8 @@ def cv_draw_bboxes_3d_kitti(img, bboxes_3d, label_map=None, color_map=KITTI_COLO
     for cls, score, proj2d, loc, bbox in zip(classes, scores, proj2des, locations, bboxes_2d):
         label = label_map[cls] if label_map is not None else cls
         cv_draw_bbox_3d_kitti(img, label, score, proj2d.T.astype(np.int), loc,  color_map[cls], thickness=2)
-        plot_one_box(bbox, img, color=color_map[cls], label=label, line_thickness=2)
+        if draw_bbox2d:
+            plot_one_box(bbox, img, color=color_map[cls], label=label, line_thickness=2)
     return img
 
 

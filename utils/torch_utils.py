@@ -111,8 +111,23 @@ def fuse_conv_and_bn(conv, bn):
             b_conv = torch.zeros(conv.weight.size(0), device=conv.weight.device)
         b_bn = bn.bias - bn.weight.mul(bn.running_mean).div(torch.sqrt(bn.running_var + bn.eps))
         fusedconv.bias.copy_(torch.mm(w_bn, b_conv.reshape(-1, 1)).reshape(-1) + b_bn)
-
+        fusedconv = fusedconv.to(conv.weight.device,conv.weight.dtype)
         return fusedconv
+
+
+def fuse_conv_and_bn_in_sequential(sq):
+    modules = []
+    if type(sq) == nn.Sequential:
+        for i in range(len(sq) - 1):
+            if type(sq[i]) == nn.Conv2d and type(sq[i+1]) == nn.BatchNorm2d:
+                modules.append(fuse_conv_and_bn(sq[i], sq[i+1]))
+            elif type(sq[i]) == nn.BatchNorm2d:
+                continue
+            else:
+                modules.append(sq[i])
+        return nn.Sequential(*modules)
+    else:
+        return sq
 
 
 def model_info(model, verbose=False):

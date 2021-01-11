@@ -28,13 +28,13 @@ class SMOKECoder(object):
 
         return depth
 
-    def decode_location(self, centers, depths, Ks):
+    def decode_location(self, centers, depths, invKs):
         '''
         retrieve objects location in camera coordinate based on projected points
         Args:
             centers: projection  of center points
             depths: object depth z
-            Ks: camera intrinsic matrix, shape = [N, 3, 3]
+            invKs: camera intrinsic matrix, shape = [N, 3, 3]
         Returns:
             locations: objects location, shape = [N, 3]
         '''
@@ -42,7 +42,7 @@ class SMOKECoder(object):
 
         # number of points
         N = centers.shape[0]
-        Ks_inv = Ks.inverse()
+        # Ks_inv = Ks.inverse()
 
         # transform project points in homogeneous form.
         centers_extend = torch.cat((centers, torch.ones(N, 1).to(device=device)), dim=1)
@@ -51,7 +51,7 @@ class SMOKECoder(object):
         # with depth
         centers_extend = centers_extend * depths.view(N, -1, 1)
         # transform image coordinates back to object locations
-        locations = torch.matmul(Ks_inv, centers_extend)
+        locations = torch.matmul(invKs, centers_extend)
 
         return locations.squeeze(2)
 
@@ -197,7 +197,7 @@ class SMOKECoder(object):
                                             ).type_as(pred3d_logits).permute(0, 2, 1).contiguous()
         return pred_vertexs_dim, pred_vertexs_loc, pred_vertexs_ry
 
-    def decode_smoke_pred3d_logits_eval(self, img_id, centers, centers_off, clses, pred3d_logits, Ks):
+    def decode_smoke_pred3d_logits_eval(self, img_id, centers, centers_off, clses, pred3d_logits, invKs):
         '''
 
         :param img_id:
@@ -205,7 +205,7 @@ class SMOKECoder(object):
         :param centers_off:
         :param clses:
         :param pred3d_logits: (B, K, H, W), here K is (z_off, sin(alpha), cos(alpha), h, w, l)
-        :param Ks:
+        :param invKs: (B, 3, 3)
         :return:
         '''
         K = pred3d_logits.shape[1]
@@ -217,6 +217,6 @@ class SMOKECoder(object):
         pred_dims = self.decode_dimension(clses, pred3d_logits[:, -3:])
         pred_depths = self.decode_depth(pred3d_logits[:, 0])
         pred_locs = self.decode_location(centers.float() + centers_off,
-                                         pred_depths, Ks.view(-1, 3, 3))
+                                         pred_depths, invKs)
         pred_rys, pred_alpha = self.decode_orientation(F.normalize(pred3d_logits[:, 1:3], p=2, dim=-1), pred_locs)
         return pred_dims, pred_locs, pred_rys, pred_alpha

@@ -61,38 +61,40 @@ def detect(model, dataset, cfg):
             for i in range(Bs):
                 NKs[i] = Ks[img_ids == i][0:1, :]
             NKs = torch.cat(NKs, dim=0).to(cfg.DEVICE)
+            invKs = NKs.view(-1, 3, 3).inverse()
             # Set host input to the image. The trt_utils.do_inference function will copy the input to the GPU before executing.
             nh, nw = int(h // cfg.MODEL.DOWN_SAMPLE), int(w // cfg.MODEL.DOWN_SAMPLE)
-            output_shapes = [[1, num_classes, nh, nw], [1, 8*2, nh, nw], [1, 2, nh, nw], [1, 6, nh, nw]]
+            output_shapes = [[1, num_classes, nh, nw], [1, 8, nh, nw]]
             inputs[0].host = imgs
             t1 = time.time()
             trt_outputs = trt_utils.do_inference_v2(context, bindings=bindings, inputs=inputs, outputs=outputs, stream=stream)
             trt_outputs = [torch.from_numpy(output.reshape(shape)).to(cfg.DEVICE) for output, shape in zip(trt_outputs, output_shapes)]
-            preds = model.inference(trt_outputs, NKs)
+            preds = model.inference(trt_outputs, invKs)
             t2 = time.time()
             mem = '%.3gG' % (torch.cuda.memory_cached() / 1E9 if torch.cuda.is_available() else 0)  # (GB)
             s = ('%10s' + '%10.4g' * 2) % (mem, targets.get_field('mask').shape[0], t2 - t1)
             pbar.set_description(s)
+            Ks = NKs
             H, W, _ = src.shape
             bird_view = np.zeros((H, H, 3), dtype=np.uint8)
             src_bv = np.copy(bird_view)
-            src_optim = np.copy(src)
-            src_optim_bv = np.copy(bird_view) + np.array([50, 50, 50], dtype=np.uint8)
-            src_vertex_reg = np.copy(src)
-            src_vertex_reg_bv = np.copy(bird_view) + np.array([100, 100, 100], dtype=np.uint8)
+            # src_optim = np.copy(src)
+            # src_optim_bv = np.copy(bird_view) + np.array([50, 50, 50], dtype=np.uint8)
+            # src_vertex_reg = np.copy(src)
+            # src_vertex_reg_bv = np.copy(bird_view) + np.array([100, 100, 100], dtype=np.uint8)
             if preds[0] is not None:
-                K = NKs[0].cpu().numpy()
+                K = Ks[0].cpu().numpy()
                 K[:6] *= cfg.MODEL.DOWN_SAMPLE
                 pred = preds[0].cpu().numpy()
                 pred_out = ParamList.ParamList((0, 0))
                 pred_out.add_field('class', pred[:, 0].astype(np.int32))
                 pred_out.add_field('alpha', pred[:, 1])
-                pred_out.add_field('bbox', pred[:, 2:6])
-                pred_out.add_field('dimension', pred[:, 6:9])
-                pred_out.add_field('location', pred[:, 9:12])
-                pred_out.add_field('Ry', pred[:, 12])
-                pred_out.add_field('score', pred[:, 13])
-                pred_out.add_field('vertex', pred[:, 14:].reshape(-1, 8, 2))
+                # pred_out.add_field('bbox', pred[:, 2:6])
+                pred_out.add_field('dimension', pred[:, 2:5])
+                pred_out.add_field('location', pred[:, 5:8])
+                pred_out.add_field('Ry', pred[:, 8])
+                pred_out.add_field('score', pred[:, 9])
+                # pred_out.add_field('vertex', pred[:, 14:].reshape(-1, 8, 2))
                 pred_out.add_field('K', K.reshape(1, 9).repeat((pred.shape[0]), axis=0))
 
                 targ = ParamList.ParamList(targets.size, is_training=False)
@@ -106,25 +108,14 @@ def detect(model, dataset, cfg):
                 targ.delete_by_mask()
                 targ = targ.numpy()
                 targ.update_field('K', K.reshape(1, 9).repeat((N,), axis=0))
-                optim_out = model_utils.optim_decode_bbox3d(pred_out, K)
+                # optim_out = model_utils.optim_decode_bbox3d(pred_out, K)
 
                 visual_utils.cv_draw_bboxes_3d_kitti(src, pred_out,
                                                      label_map=cfg.DATASET.OBJs)
-                visual_utils.cv_draw_bbox3d_birdview(src_bv, pred_out, color=(255, 0, 0))
                 visual_utils.cv_draw_bbox3d_birdview(src_bv, targ, color=(0, 0, 255))
-                visual_utils.cv_draw_bboxes_3d_kitti(src_optim, optim_out,
-                                                     label_map=cfg.DATASET.OBJs)
-                visual_utils.cv_draw_bbox3d_birdview(src_optim_bv, optim_out, color=(255, 0, 0))
-                visual_utils.cv_draw_bbox3d_birdview(src_optim_bv, targ, color=(0, 0, 255))
-                visual_utils.cv_draw_bbox3d_rtm3d(src_vertex_reg,
-                                                  pred_out.get_field('class'),
-                                                  pred_out.get_field('score'),
-                                                  pred_out.get_field('vertex'),
-                                                  label_map=cfg.DATASET.OBJs)
+                visual_utils.cv_draw_bbox3d_birdview(src_bv, pred_out, color=(0, 255, 0))
 
-            kf = np.concatenate([np.concatenate([src, src_bv], axis=1),
-                                 np.concatenate([src_optim, src_optim_bv], axis=1),
-                                 np.concatenate([src_vertex_reg, src_vertex_reg_bv], axis=1)], axis=0)
+            kf = np.concatenate([src, src_bv], axis=1)
             kf = cv2.resize(kf, (kf.shape[1] // 2, kf.shape[0] // 2))
             cv2.imshow('rtm3d_detect', kf)
             # videowriter.write(kf)

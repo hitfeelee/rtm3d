@@ -25,3 +25,7 @@ class RTM3DHeader(nn.Module):
         main_kf_logits = self.main_kf_header(x)
         regress_logits = self.regress_header(x)
         return main_kf_logits, regress_logits
+
+    def fuse(self):
+        self.main_kf_header = torch_utils.fuse_conv_and_bn_in_sequential(self.main_kf_header)
+        self.regress_header = torch_utils.fuse_conv_and_bn_in_sequential(self.regress_header)

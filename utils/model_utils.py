@@ -5,7 +5,7 @@ import torch
 from scipy.optimize import minimize
 import scipy.optimize as optimize
 from utils.ParamList import ParamList
-
+import torch.nn as nn
 
 def sigmoid_hm(hm_features):
     x = hm_features.sigmoid_()
@@ -318,3 +318,38 @@ def optim_decode_bbox3d(pred3d, K):
     out.add_field('location', np.concatenate(nlocs, axis=0) if len(nlocs) else np.zeros((0, 3)))
     out.add_field('K', np.concatenate(Ks, axis=0) if len(nlocs) else np.zeros((0, 9)))
     return out
+
+
+def iou(bboxes1, bboxes2):
+    '''
+
+    :param bboxes1: shape(N, 4)
+    :param bboxes2: shape(M, 4)
+    :return:
+    '''
+    areas1 = (bboxes1[:, 2] - bboxes1[:, 0]) * (bboxes1[:, 3] - bboxes1[:, 1])
+    areas2 = (bboxes2[:, 2] - bboxes2[:, 0]) * (bboxes2[:, 3] - bboxes2[:, 1])
+    unions = areas1.reshape(-1, 1) + areas2.reshape(1, -1)
+    down_xys = np.maximum(bboxes1[:, None, 0:2], bboxes2[None, :,  0:2])
+    up_xys = np.minimum(bboxes1[:, None, 2:], bboxes2[None, :, 2:])
+    w_h = np.clip(up_xys - down_xys, a_min=0)
+    jac = w_h.prod(axis=-1)
+    return jac/(unions - jac)
+
+
+def batch_nms(clses, bboxes, scores, th):
+    keeps = []
+    for cls, indice in np.unique(clses, return_index=True):
+        # get same class sample
+        cls_i = clses[indice]
+        bbox_i = bboxes[indice]
+        score_i = scores[indice]
+
+        mask = np.bitwise_not(np.eye(len(indice)).astype(np.bool))
+        iou_matrix = (iou(bbox_i, bbox_i) > th & mask)
+        score_matrix = (score_i.reshape(-1, 1) - score_i.reshape(1, -1)) < 0
+        condi_matrix = iou_matrix & score_matrix
+        suppressed = np.sum(condi_matrix.astype(np.int), axis=-1) > 0  # > 0 , will be suppressed
+        keep = np.bitwise_not(suppressed)
+        keeps.append(indice[keep])
+    return np.concatenate(keeps, axis=0)

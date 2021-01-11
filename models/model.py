@@ -28,7 +28,7 @@ class Model(nn.Module):
         else:
             return self.inference([p.clone() for p in pred_logits], Ks), pred_logits
 
-    def inference(self, pred_logits, Ks):
+    def inference(self, pred_logits, invKs):
         main_kf_logits = pred_logits[0]
         regress_logits = pred_logits[1]
         Bs = main_kf_logits.shape[0]
@@ -39,7 +39,7 @@ class Model(nn.Module):
                                                                       self.config.DETECTOR.TOPK_CANDIDATES)
             if len(clses_i) == 0:
                 continue
-            K_i = Ks[i:i+1].repeat(len(clses_i), 1).view(-1, 3, 3)
+            K_i = invKs[i:i+1].repeat(len(clses_i), 1, 1)
 
             m_projs_offset_i = regress_logits[i][:2, m_projs_i[1].long(), m_projs_i[0].long()].sigmoid_()
             m_projs_i = torch.cat([m_projs_i[0].unsqueeze(-1), m_projs_i[1].unsqueeze(-1)], dim=-1)
@@ -59,12 +59,15 @@ class Model(nn.Module):
 
         return results
 
-    # def fuse(model):
-    #     for m in model.modules():
-    #         if type(m) is Conv:
-    #             m.conv = torch_utils.fuse_conv_and_bn(m.conv, m.bn)  # update conv
-    #             m.bn = None  # remove batchnorm
-    #             m.forward = m.fuseforward  # update forward
+    def fuse(model):
+        for m in model.modules():
+            print(type(m))
+            if type(m) == RTM3DHeader:
+                m.fuse()
+            # if type(m) is Conv:
+            #     m.conv = torch_utils.fuse_conv_and_bn(m.conv, m.bn)  # update conv
+            #     m.bn = None  # remove batchnorm
+            #     m.forward = m.fuseforward  # update forward
 
     def _obtain_main_proj2d(self, main_kf_logits, confidence, topK=30):
         '''
