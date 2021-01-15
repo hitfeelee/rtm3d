@@ -39,8 +39,23 @@ def setup(args):
     opt = CfgNode(args.__dict__)
     cfg.merge_from_other_cfg(opt)
     device = torch.device(cfg.DEVICE) if torch.cuda.is_available() else torch.device('cpu')
-    cfg.update({'DEVICE': device})
+    keep_batchnorm_fp32 = None if not cfg.keep_batchnorm_fp32 else cfg.keep_batchnorm_fp32
+    loss_scale = None if not cfg.loss_scale else cfg.loss_scale
+    cfg.update({
+        'keep_batchnorm_fp32': keep_batchnorm_fp32,
+        'loss_scale': loss_scale,
+        'DEVICE': device
+    })
     model = model_factory.create_model(cfg)
+    model.to(cfg.DEVICE)
+    if cfg.sync_bn:
+        import apex
+        print("using apex synced BN")
+        model = apex.parallel.convert_syncbn_model(model)
+    solver = Solver(model, cfg)
+    if cfg.apex:
+        model = solver.apply_apex(model)
+
     dataloader = create_dataloader(cfg.DATASET.PATH, cfg,
                                    TrainAugmentation(cfg.INPUT_SIZE[0], mean=cfg.DATASET.MEAN),
                                    is_training=True)[0]
@@ -49,11 +64,6 @@ def setup(args):
                                    TestTransform(cfg.INPUT_SIZE[0], mean=cfg.DATASET.MEAN),
                                    is_training=True, split='test')[0]
     model.train()
-    model.to(cfg.DEVICE)
-    nb = len(dataloader)
-    max_step_burn_in = max(3 * nb, 1e3)  # burn-in iterations, max(3 epochs, 1k iterations)
-    # solver = Solver(model, cfg, max_steps_burn_in=max_step_burn_in, apex=amp)
-    solver = Solver(model, cfg)
     rtm3d_loss = RTM3DLoss(cfg)
     return model, (dataloader, test_dataloader), solver, rtm3d_loss, cfg
 
@@ -63,12 +73,12 @@ def test_epoch(model, dataloader, rtm3d_loss, cfg):
     model.eval()
     pbar = tqdm.tqdm(enumerate(dataloader), total=nb)  # progress bar
     mloss = torch.tensor(0, dtype=torch.float32, device=cfg.DEVICE)
+    mloss_items = torch.zeros((6,), dtype=torch.float32, device=cfg.DEVICE)
     num = 0
-    for i, (imgs, targets, paths, _) in pbar:  # batch -------------------------------------------------------------
+    for i, (imgs, targets, paths, _, _) in pbar:  # batch -------------------------------------------------------------
         with torch.no_grad():
             imgs = imgs.to(cfg.DEVICE)
             targets = targets.to(cfg.DEVICE)
-            params = ParamList(targets.size)
             img_ids = targets.get_field('img_id')
             Ks = targets.get_field('K')
             Bs = imgs.shape[0]
@@ -76,13 +86,15 @@ def test_epoch(model, dataloader, rtm3d_loss, cfg):
             for i in range(Bs):
                 NKs[i] = Ks[img_ids == i][0:1, :]
             NKs = torch.cat(NKs, dim=0)
-            pred = model(imgs, Ks=NKs)[1]
+            invKs = NKs.view(-1, 3, 3).inverse()
+            pred = model(imgs, invKs=invKs)[1]
             loss, loss_items = rtm3d_loss(pred, targets)
             if not torch.isfinite(loss):
                 print('WARNING: non-finite loss, ending training ', loss_items)
                 return
             batch_size = imgs.shape[0]
             mloss += (loss * batch_size)
+            mloss_items += (loss_items*batch_size)
             num += batch_size
 
     print('test loss: %s' % (mloss / num))
@@ -98,7 +110,7 @@ def train_epoch(model, dataloader, solver, rtm3d_loss, cfg, tb_writer, epoch):
     pbar = tqdm.tqdm(enumerate(dataloader), total=nb)  # progress bar
     mloss = torch.zeros((6,), dtype=torch.float32, device=cfg.DEVICE)
     epochs = cfg.SOLVER.MAX_EPOCH
-    for i, (imgs, targets, paths, _) in pbar:  # batch -------------------------------------------------------------
+    for i, (imgs, targets, paths, _, _) in pbar:  # batch -------------------------------------------------------------
         imgs = imgs.to(cfg.DEVICE)
         targets = targets.to(cfg.DEVICE)
         pred = model(imgs)
@@ -146,7 +158,7 @@ def train(model, dataloader, solver, rtm3d_loss, cfg):
     if len(cfg.TRAINING.CHECKPOINT_FILE) > 0:
         ckpt = checkpointer.load(cfg.TRAINING.CHECKPOINT_FILE,
                                  use_latest=(cfg.TRAINING.CHECKPOINT_MODE != 'pretrained'),
-                                 load_solver=cfg.SOLVER.LOAD_SOLVER)
+                                 load_solver=(cfg.SOLVER.LOAD_SOLVER and cfg.TRAINING.CHECKPOINT_MODE == 'resume'))
         if 'epoch' in ckpt and cfg.TRAINING.CHECKPOINT_MODE == 'resume':
             start_epoch = ckpt['epoch'] + 1
         if 'min_loss' in ckpt and cfg.TRAINING.CHECKPOINT_MODE == 'resume':
@@ -180,6 +192,17 @@ if __name__ == '__main__':
                         help='the num of threads for data.')
     parser.add_argument('--test', action='store_true',
                         help='run test.')
+    ####################################################################
+    ##############     Apex Distributed Data Parallel            ############
+    ####################################################################
+    parser.add_argument('--apex', action='store_true',
+                        help='enabling apex.')
+    parser.add_argument('--sync_bn', action='store_true',
+                        help='enabling apex sync BN.')
+    parser.add_argument('--opt-level', type=str, default='O1')
+    parser.add_argument('--keep-batchnorm-fp32', type=str, default='')
+    parser.add_argument('--loss-scale', type=str, default='')
+    parser.add_argument('--channels-last', type=bool, default=False)
     args = parser.parse_args()
     model, dataloader, solver, rtm3d_loss, cfg = setup(args)
     train(model, dataloader, solver, rtm3d_loss, cfg)

@@ -18,6 +18,10 @@ from models.nets import dla
 from models.nets import resnet
 from models.model import Model
 from models.configs.detault import CONFIGS as configs
+try:
+    from apex.parallel import DistributedDataParallel as DDP
+except ImportError:
+    raise ImportError("Please install apex from https://www.github.com/nvidia/apex to run this example.")
 
 
 def create_model(configs):
@@ -52,27 +56,20 @@ def make_data_parallel(model, configs):
         # For multiprocessing distributed, DistributedDataParallel constructor
         # should always set the single device scope, otherwise,
         # DistributedDataParallel will use all available devices.
-        if configs.gpu_idx != -1:
-            torch.cuda.set_device(configs.gpu_idx)
-            model.cuda(configs.gpu_idx)
-            # When using a single GPU per process and per
-            # DistributedDataParallel, we need to divide the batch size
-            # ourselves based on the total number of GPUs we have
-            configs.BATCH_SIZE = int(configs.BATCH_SIZE / configs.ngpus_per_node)
-            configs.num_workers = int((configs.num_workers + configs.ngpus_per_node - 1) / configs.ngpus_per_node)
-            model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[configs.gpu_idx],
-                                                              find_unused_parameters=True)
+        # torch.cuda.set_device(configs.gpu_idx)
+        # model.cuda(configs.gpu_idx).to(memory_format=configs.memory_format)
+        # When using a single GPU per process and per
+        # DistributedDataParallel, we need to divide the batch size
+        # ourselves based on the total number of GPUs we have
+        if configs.apex:
+            model = DDP(model, delay_allreduce=True)
         else:
-            model.cuda()
-            # DistributedDataParallel will divide and allocate batch_size to all
-            # available GPUs if device_ids are not set
-            model = torch.nn.parallel.DistributedDataParallel(model, find_unused_parameters=True)
-    elif configs.gpu_idx != -1:
-        torch.cuda.set_device(configs.gpu_idx)
-        model = model.cuda(configs.gpu_idx)
+            model = torch.nn.parallel.DistributedDataParallel(model,
+                                                              device_ids=[
+                                                                  configs.gpu_idx] if configs.gpu_idx != -1 else None,
+                                                              find_unused_parameters=True)
     else:
-        # DataParallel will divide and allocate batch_size to all available GPUs
-        model = torch.nn.DataParallel(model).cuda()
+        model = model.cuda(configs.gpu_idx) if configs.gpu_idx != -1 else model.cuda()
 
     return model
 

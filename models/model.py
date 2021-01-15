@@ -19,14 +19,14 @@ class Model(nn.Module):
         self.export = False
         torch_utils.initialize_weights(self)
 
-    def forward(self, x, Ks=None):
+    def forward(self, x, invKs=None):
         x = self.backbone(x)
         x = self.kfpn_fusion(x)
         pred_logits = self.detect_header(x)
         if self.training or self.export:
             return pred_logits
         else:
-            return self.inference([p.clone() for p in pred_logits], Ks), pred_logits
+            return self.inference([p.clone() for p in pred_logits], invKs), pred_logits
 
     def inference(self, pred_logits, invKs):
         main_kf_logits = pred_logits[0]
@@ -45,7 +45,7 @@ class Model(nn.Module):
             m_projs_i = torch.cat([m_projs_i[0].unsqueeze(-1), m_projs_i[1].unsqueeze(-1)], dim=-1)
             m_projs_offset_i = torch.cat([m_projs_offset_i[0].unsqueeze(-1), m_projs_offset_i[1].unsqueeze(-1)], dim=-1)
             pred_dims_i, pred_locs_i, pred_rys_i, pred_alpha_i = self.smoke_encoder.decode_smoke_pred3d_logits_eval(
-                i, m_projs_i.long(), m_projs_offset_i, clses_i, regress_logits[:, 2:, :, :], K_i)
+                i, m_projs_i, m_projs_offset_i, clses_i, regress_logits[:, 2:, :, :], K_i)
 
             m_projs_i += m_projs_offset_i
 
@@ -90,7 +90,7 @@ class Model(nn.Module):
         xy = indices % (H * W)
         y = xy // W
         x = xy % W
-        return cls, scores, [x.to(torch.float32), y.to(torch.float32)]
+        return cls, scores, [x.type_as(main_kf_logits), y.type_as(main_kf_logits)]
 
     def _obtain_offset_fr_main(self, offset_fr_main_logits, main_projs):
         '''

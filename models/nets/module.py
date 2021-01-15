@@ -53,6 +53,7 @@ class FocalLoss(nn.Module):
 
         positive_loss = torch.log(prediction) \
                         * torch.pow(1 - prediction, self.alpha) * positive_index
+
         negative_loss = torch.log(1 - prediction) \
                         * torch.pow(prediction, self.alpha) * negative_weights * negative_index
 

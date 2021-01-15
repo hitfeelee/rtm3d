@@ -1,11 +1,13 @@
 INPUT_SIZE: (1280, 1280)
 DEVICE: 'cuda'
 BATCH_SIZE: 32
+#DATASET:
+#  PATH: './datasets/data/kitti/tracking'
 TRAINING:
-#  CHECKPOINT_FILE: '/home/wm/.cache/torch/hub/checkpoints/resnet18-5c106cde.pth'
-  CHECKPOINT_FILE: './models/pretrained/simple-smoke/RESNET-18/model_best.pt'
-  CHECKPOINT_MODE: 'resume'
-  WEIGHTS: './weights_multi_gpu'
+  CHECKPOINT_FILE: '/home/wm/.cache/torch/hub/checkpoints/resnet18-5c106cde.pth'
+#  CHECKPOINT_FILE: './weights_multi_gpu/RESNET-18/model_0000093.pt'
+  CHECKPOINT_MODE: 'pretrained'
+  WEIGHTS: './weights'
   W_MKF: 1.
   W_V_OFF: 0.5
   W_V_DIM: 0.5
@@ -15,15 +17,16 @@ MODEL:
   BACKBONE: 'RESNET-18'
   KFNs: ['layer1', 'layer2', 'layer3', 'layer4']
 SOLVER:
-  BASE_LR: 0.0001
+  BASE_LR: 0.001
   STEPS: (44000,)
-  WARMUP_FACTOR: 1.
-  WARMUP_ITERS: 1
+  WARMUP_FACTOR: 0.001
+  WARMUP_ITERS: 1000
   MAX_EPOCH: 300
   LOAD_SOLVER: True
   MOMENTUM: 0.9
 #  EXCLUDE_SCOPE: ['detect_header.regress_header']
 DETECTOR:
-  CHECKPOINT: './models/pretrained/simple-smoke/RESNET-18/model_0000301.pt'
+#  CHECKPOINT: './models/pretrained/simple-smoke/RESNET-18/model_0000301.pt'
+  CHECKPOINT: './weights_multi_gpu/RESNET-18/model_0000114.pt'
   SCORE_THRESH: 0.4
   TOPK_CANDIDATES: 100

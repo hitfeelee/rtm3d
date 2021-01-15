@@ -22,6 +22,14 @@ from utils import torch_utils
 import logging
 import sys
 from utils.ParamList import ParamList
+try:
+    from apex.parallel import DistributedDataParallel as DDP
+    from apex.fp16_utils import *
+    from apex import amp, optimizers
+    from apex.multi_tensor_apply import multi_tensor_applier
+except ImportError:
+    raise ImportError("Please install apex from https://www.github.com/nvidia/apex to run this example.")
+
 logging.basicConfig(stream=sys.stdout, level=logging.INFO, format='%(message)s')
 
 model_name = "model_{:07d}"
@@ -41,6 +49,16 @@ def configure(args):
 
     cfg.distributed = cfg.world_size > 1 or cfg.multiprocessing_distributed
     cfg.ngpus_per_node = torch.cuda.device_count()
+    # if cfg.channels_last:
+    #     memory_format = torch.channels_last
+    # else:
+    #     memory_format = torch.contiguous_format
+    keep_batchnorm_fp32 = None if not cfg.keep_batchnorm_fp32 else cfg.keep_batchnorm_fp32
+    loss_scale = None if not cfg.loss_scale else cfg.loss_scale
+    cfg.update({
+        'keep_batchnorm_fp32': keep_batchnorm_fp32,
+        'loss_scale': loss_scale
+    })
     return cfg
 
 
@@ -48,6 +66,8 @@ def setup(gpu_idx, configs):
     configs.gpu_idx = gpu_idx
     device = torch.device('cpu' if configs.gpu_idx == -1 else 'cuda:{}'.format(configs.gpu_idx))
     configs.update({'DEVICE': device})
+    if configs.gpu_idx != -1:
+        torch.cuda.set_device(configs.gpu_idx)
     save_dir = os.path.join(configs.TRAINING.WEIGHTS, configs.MODEL.BACKBONE)
     logs_dir = os.path.join(configs.TRAINING.LOGDIR, configs.MODEL.BACKBONE)
     if not os.path.exists(save_dir):
@@ -66,6 +86,8 @@ def setup(gpu_idx, configs):
         dist.init_process_group(backend=configs.dist_backend, init_method=configs.dist_url,
                                 world_size=configs.world_size, rank=configs.rank)
         configs.subdivisions = int(64 / configs.BATCH_SIZE / configs.ngpus_per_node)
+        configs.BATCH_SIZE = int(configs.BATCH_SIZE / configs.ngpus_per_node)
+        configs.num_workers = int((configs.num_workers + configs.ngpus_per_node - 1) / configs.ngpus_per_node)
     else:
         configs.subdivisions = int(64 / configs.BATCH_SIZE)
 
@@ -81,6 +103,15 @@ def setup(gpu_idx, configs):
         logger = None
         tb_writer = None
     model = model_factory.create_model(configs)
+    model.cuda(configs.gpu_idx)
+    if configs.sync_bn:
+        import apex
+        print("using apex synced BN")
+        model = apex.parallel.convert_syncbn_model(model)
+    solver = Solver(model, configs)
+    if configs.apex:
+        model = solver.apply_apex(model)
+
     checkpointer = check_point.CheckPointer(model,
                                             save_dir=save_dir,
                                             save_to_disk=True,
@@ -89,7 +120,6 @@ def setup(gpu_idx, configs):
     configs.start_epoch = 0
     configs.min_loss = 10000
 
-    ckpt = {}
     if len(configs.TRAINING.CHECKPOINT_FILE) > 0:
         ckpt = checkpointer.load(configs.TRAINING.CHECKPOINT_FILE,
                                  use_latest=(configs.TRAINING.CHECKPOINT_MODE != 'pretrained'),
@@ -101,7 +131,6 @@ def setup(gpu_idx, configs):
         del ckpt
     # Data Parallel
     model = model_factory.make_data_parallel(model, configs)
-    solver = Solver(model, configs)
     checkpointer.set_solver(solver)
     if configs.TRAINING.CHECKPOINT_MODE == 'resume' and configs.SOLVER.LOAD_SOLVER:
         checkpointer.load_solver_multi_gpu(configs.TRAINING.CHECKPOINT_FILE, use_latest=True)
@@ -145,11 +174,11 @@ def test_epoch(model, dataloader, rtm3d_loss, configs):
         pbar = enumerate(dataloader)
     mloss = 0
     num = 0
-    for i, (imgs, targets, paths, _) in pbar:  # batch -------------------------------------------------------------
+    mloss_items = torch.zeros((6,), dtype=torch.float32, device=configs.DEVICE)
+    for i, (imgs, targets, paths, _, _) in pbar:  # batch -------------------------------------------------------------
         with torch.no_grad():
             imgs = imgs.to(configs.DEVICE)
             targets = targets.to(configs.DEVICE)
-            params = ParamList(targets.size)
             img_ids = targets.get_field('img_id')
             Ks = targets.get_field('K')
             Bs = imgs.shape[0]
@@ -157,21 +186,31 @@ def test_epoch(model, dataloader, rtm3d_loss, configs):
             for i in range(Bs):
                 NKs[i] = Ks[img_ids == i][0:1, :]
             NKs = torch.cat(NKs, dim=0)
-            pred = model(imgs, Ks=NKs)[1]
+            NKs = NKs.to(configs.DEVICE)
+            invKs = NKs.view(-1, 3, 3).inverse()
+            pred = model(imgs, invKs=invKs)[1]
             loss, loss_items = rtm3d_loss(pred, targets)
             if not torch.isfinite(loss):
                 print('WARNING: non-finite loss, ending training ', loss_items)
                 return
-            batch_size = imgs.shape[0]
+
             if configs.distributed:
                 reduced_loss = torch_utils.reduce_tensor(loss.data, configs.world_size)
+                reduced_loss_items = torch_utils.reduce_tensor(loss_items.data, configs.world_size)
             else:
                 reduced_loss = loss.data
+                reduced_loss_items = loss_items.data
+
+            batch_size = configs.BATCH_SIZE * configs.ngpus_per_node
             mloss += (reduced_loss.cpu().item() * batch_size)
+            mloss_items += reduced_loss_items * batch_size
             num += batch_size
 
     if configs.is_master_node:
-        print('The loss in test dataset: %s' % (mloss / num))
+        print('The loss in test dataset:')
+        print(('%1s' + '%10s' * 6) % (' ', 'MKF', 'M_OFF', 'DIM', 'DEPTH', 'ORIENT', 'total'))
+        mloss_items /= num
+        print(('%1s' + '%10.4g' * 6) % (' ', *mloss_items))
     return mloss / num
 
 
@@ -189,14 +228,14 @@ def train_epoch(model, dataloader, solver, rtm3d_loss, configs, tb_writer, epoch
     else:
         pbar = enumerate(train_dataloader)
     mloss = torch.zeros((6,), dtype=torch.float32, device=configs.DEVICE)
-    time1 = time.time()
-    for i, (imgs, targets, paths, _) in pbar:  # batch -------------------------------------------------------------
+    # time1 = time.time()
+    for i, (imgs, targets, paths, _, _) in pbar:  # batch -------------------------------------------------------------
         imgs = imgs.to(configs.DEVICE)
         targets = targets.to(configs.DEVICE)
         pred = model(imgs)
-        time2 = time.time()
+        # time2 = time.time()
         loss, loss_items = rtm3d_loss(pred, targets)
-        time3 = time.time()
+        # time3 = time.time()
         if not torch.isfinite(loss):
             print('WARNING: non-finite loss, ending training ', loss_items)
             return
@@ -205,15 +244,13 @@ def train_epoch(model, dataloader, solver, rtm3d_loss, configs, tb_writer, epoch
             mloss = (mloss + loss_items) / 2
         else:
             mloss = loss_items
-        # solver.step(loss)
-        # print(loss)
+
         if configs.distributed:
             reduced_loss = torch_utils.reduce_tensor(loss.data, configs.world_size)
         else:
             reduced_loss = loss.data
         loss.data = reduced_loss.data
         solver.step(loss)
-        # print(reduced_loss)
 
         if configs.is_master_node:
             mem = '%.3gG' % (torch.cuda.memory_cached() / 1E9 if torch.cuda.is_available() else 0)  # (GB)
@@ -293,5 +330,16 @@ if __name__ == '__main__':
                              'N processes per node, which has N GPUs. This is the '
                              'fastest way to use PyTorch for either single node or '
                              'multi node data parallel training')
+    ####################################################################
+    ##############     Apex Distributed Data Parallel            ############
+    ####################################################################
+    parser.add_argument('--apex', action='store_true',
+                        help='enabling apex.')
+    parser.add_argument('--sync_bn', action='store_true',
+                        help='enabling apex sync BN.')
+    parser.add_argument('--opt-level', type=str)
+    parser.add_argument('--keep-batchnorm-fp32', type=str, default='')
+    parser.add_argument('--loss-scale', type=str, default='')
+    parser.add_argument('--channels-last', type=bool, default=False)
     args = parser.parse_args()
     main(args)

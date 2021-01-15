@@ -45,7 +45,7 @@ class SMOKECoder(object):
         # Ks_inv = Ks.inverse()
 
         # transform project points in homogeneous form.
-        centers_extend = torch.cat((centers, torch.ones(N, 1).to(device=device)), dim=1)
+        centers_extend = torch.cat((centers, torch.ones(N, 1).type_as(centers)), dim=1)
         # expand project points as [N, 3, 1]
         centers_extend = centers_extend.unsqueeze(-1)
         # with depth
@@ -211,12 +211,12 @@ class SMOKECoder(object):
         K = pred3d_logits.shape[1]
         pred3d_logits = pred3d_logits.permute(0, 2, 3, 1).contiguous()
         pred3d_logits = pred3d_logits[img_id,
-                                      centers[:, 1],
-                                      centers[:, 0]].view(-1, K)
+                                      centers[:, 1].long(),
+                                      centers[:, 0].long()].view(-1, K)
 
         pred_dims = self.decode_dimension(clses, pred3d_logits[:, -3:])
         pred_depths = self.decode_depth(pred3d_logits[:, 0])
-        pred_locs = self.decode_location(centers.float() + centers_off,
+        pred_locs = self.decode_location(centers + centers_off,
                                          pred_depths, invKs)
         pred_rys, pred_alpha = self.decode_orientation(F.normalize(pred3d_logits[:, 1:3], p=2, dim=-1), pred_locs)
         return pred_dims, pred_locs, pred_rys, pred_alpha
