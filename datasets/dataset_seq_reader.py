@@ -6,22 +6,21 @@ import cv2
 import torch
 from utils.ParamList import ParamList
 from preprocess import transforms
-from datasets.data.kitti.devkit_object import utils as kitti_util
 from torch.utils.data import DataLoader
 from datasets.data.kitti.devkit_object import utils as kitti_utils
 from utils import data_utils
 
 
-class DatasetReader(Dataset):
-    def __init__(self, root, config, augment=None, is_training=True, split='train'):
-        super(DatasetReader, self).__init__()
-        self._split = split
+class SeqDatasetReader(Dataset):
+    def __init__(self, root, config, augment=None, is_training=True, split='training'):
+        super(SeqDatasetReader, self).__init__()
         self._root = root
         self._config = config
         self._augment = augment
-        self._classes = kitti_util.name_2_label(config.DATASET.OBJs)
-        self._relate_classes = kitti_util.name_2_label(config.DATASET.RELATE_OBJs)
+        self._classes = kitti_utils.name_2_label(config.DATASET.OBJs)
+        self._relate_classes = kitti_utils.name_2_label(config.DATASET.RELATE_OBJs)
         self.is_training = is_training
+        self._split = split
         self._aug_params = {
             'hsv_h': config.DATASET.aug_hsv_h,
             'hsv_s': config.DATASET.aug_hsv_s,
@@ -32,74 +31,37 @@ class DatasetReader(Dataset):
             'shear': config.DATASET.aug_shear,
         }
         self._img_size = [config.INPUT_SIZE[0]] * 2
-        self._is_mosaic = config.IS_MOSAIC
         self._is_rect = config.IS_RECT
         self._norm_params = {
             'mean_rgb': np.array(config.DATASET.MEAN, np.float32).reshape((1, 1, 3)),
             'std_rgb': np.array(config.DATASET.STD, np.float32).reshape((1, 1, 3))
         }
-        with open(os.path.join(root, 'ImageSets', '{}.txt'.format(self._split))) as f:
-            self._image_files = f.read().splitlines()
-            self._image_files = sorted(self._image_files)
 
-        label_file = os.path.join(root, 'cache', 'label_{}.npy'.format(self._split))  # saved labels in *.npy file
-        self._labels = np.load(label_file, allow_pickle=True)
-        k_file = os.path.join(root, 'cache', 'k_{}.npy'.format(self._split))  # saved labels in *.npy file
-        self._K = np.load(k_file, allow_pickle=True)
-        assert len(self._image_files) == len(self._labels) == len(self._K), 'Do not match labels and images'
-
-        sp = os.path.join(root, 'cache', 'shape_{}.npy'.format(self._split))  # shapefile path
-        s = np.load(sp, allow_pickle=True)
-        s = np.array(s).astype(dtype=np.int)
-        self.__shapes = s
-        if self._is_rect:
-            m = s.max(axis=1)
-            r = self._img_size[0] / m
-            ns = r.reshape(-1, 1) * s
-            ns_max = ns.max(axis=0)
-            ns_max = np.ceil(np.round(ns_max) / 32).astype(np.int) * 32
-            self._img_size = ns_max
+        self._Ks = {}
+        self._Ts = {}
+        self._load_seqs()
 
         self._transform = transforms.Compose([
             transforms.Normalize(),
-            # transforms.ToPercentCoords(),
-            # transforms.ToXYWH(),
             transforms.ToTensor(),
             transforms.ToNCHW()
         ])
 
     @property
-    def labels(self):
-        return self._labels
-
-    @property
-    def shapes(self):
-        return self.__shapes
-
-    @property
-    def Ks(self):
-        return self._K
-
-    @property
-    def image_files(self):
-        return self._image_files
+    def samples(self):
+        return self._samples
 
     def __len__(self):
-        return len(self._labels)
+        return len(self._samples)
 
     def __getitem__(self, index):
-        indices = [index]
-        if self._is_mosaic and self.is_training:
-            indices += [random.randint(0, len(self._labels) - 1) for _ in range(3)]  # 3 additional image indices
-        images = []
-        targets = []
-
-        for i, idx in enumerate(indices):
-            img = self.load_image(idx)
-            target = ParamList((img.shape[1], img.shape[0]))
-            K = self._K[idx]
-            _labels = self._labels[idx].copy()
-            cls, noise_mask, repeats = self._transform_obj_label(self._labels[idx][:, 0].copy())
+        img = self.load_image(index)
+        target = ParamList((img.shape[1], img.shape[0]))
+        K, T = self.load_calib_param(index)
+        _labels = self.load_labels(index)
+        N = 1
+        if len(_labels) > 0:
+            cls, noise_mask, repeats = self._transform_obj_label(_labels[index][:, 0].copy())
             _labels = np.repeat(_labels, repeats=repeats, axis=0)
             N = len(cls)
             target.add_field('class', cls)
@@ -113,92 +75,105 @@ class DatasetReader(Dataset):
             mask[cls == -1] = 0
             target.add_field('mask', mask)
             target.add_field('noise_mask', noise_mask)
-            target.add_field('K', np.repeat(K.copy().reshape(1, 9), repeats=N, axis=0))
+        target.add_field('K', np.repeat(K.copy().reshape(1, 9), repeats=N, axis=0))
 
-            if self._augment is not None:
-                img, target = self._augment(img, targets=target, **self._aug_params)
-            images.append(img)
-            targets.append(target)
-        if self._is_mosaic and self.is_training:
-            img, target = self._apply_mosaic(images, targets)
-        else:
-            img, target = self._apply_padding(images, targets)
+        if self._augment is not None:
+            img, target = self._augment(img, targets=target, **self._aug_params)
+
+        img, target = self._apply_padding(img, target)
 
         # Convert
         img = np.ascontiguousarray(img)
         params = {'device': self._config.DEVICE}
-        target = self._build_targets(target)
+        target = self._build_targets(target, build_label=(len(_labels) > 0))
         params.update(self._norm_params)
         img, target = self._transform(img, targets=target, **params)
-        path = os.path.join(self._root, 'training', 'image_2/{}.png'.format(self._image_files[index]))
-        return img, target, path, self.__shapes[index], index
+        return img, target, index
+
+    def _load_seqs(self):
+        path = os.path.join(self._root, self._split, 'image_02')
+        _seqs, _samples = [], []
+        _image_indices = []
+        self._samples = []
+        if os.path.exists(path):
+            _seqs = os.listdir(path)
+            for s in _seqs:
+                sf = sorted(os.listdir(os.path.join(path, s)))
+                _samples += [s + '/' + f.split('.')[0] for f in sf]
+                _image_indices.append(len(_samples) - 1)
+            self._samples = _samples
+            if self._is_rect:
+                shapes = np.array([self.load_image(idx).shape[-2::-1] for idx in _image_indices], dtype=np.float32)
+                m = shapes.max(axis=1)
+                r = self._img_size[0] / m
+                ns = r.reshape(-1, 1) * shapes
+                ns_max = ns.max(axis=0)
+                ns_max = np.ceil(np.round(ns_max) / 32).astype(np.int) * 32
+                self._img_size = ns_max
 
     def load_image(self, index):
-        path = os.path.join(self._root, 'training', 'image_2/', '{}.png'.format(self._image_files[index]))
+        path = os.path.join(self._root, self._split, 'image_02/', '{}.png'.format(self._samples[index]))
         img = cv2.imread(path)  # BGR
         return img
 
-    def _load_calib_param(self, index):
-        path = os.path.join(self._root, 'training', 'calib/', '{}.txt'.format(self._image_files[index]))
+    def load_labels(self, index):
+        objs = []
+        if os.path.exists(os.path.join(self._root, self._split, 'label_02/')):
+            path = os.path.join(self._root, self._split, 'label_02/', '{}.txt'.format(self._samples[index]))
+            # process label
+            K, T = self.load_calib_param(index)
+            invK = cv2.invert(K, flags=cv2.DECOMP_LU)[1]
+            TT = np.matmul(invK, T.reshape(-1, 1)).reshape((-1))
+            with open(path) as f:
+                for line in f.read().splitlines():
+                    splits = line.split()
+                    cls = kitti_utils.name_2_label(splits[0])
+                    if cls == -1:
+                        continue
+                    cls = np.array([float(cls)])
+                    bbox = np.array([float(splits[4]), float(splits[5]), float(splits[6]), float(splits[7])])
+                    dim = np.array([float(splits[8]), float(splits[9]), float(splits[10])])  # H, W, L
+                    loc = np.array([float(splits[11]), float(splits[12]) - float(splits[8]) / 2,
+                                    float(splits[13])]) + TT  # x, y, z
+                    alpha = np.array([float(splits[3])])
+                    ry = np.array([float(splits[-1])])
+                    objs.append(np.concatenate([cls, bbox, dim, alpha, ry, loc], axis=0).reshape((1, -1)))
+                objs = np.concatenate(objs, axis=0)
+
+        return objs
+
+    def load_calib_param(self, index):
+        seq = self._samples[index].split('/')[0]
+        if seq in self._Ks and seq in self._Ts:
+            return self._Ks[seq], self._Ts[seq]
+        path = os.path.join(self._root, self._split, 'calib/', '{}.txt'.format(seq))
         with open(path) as f:
             K = [line.split()[1:] for line in f.read().splitlines() if line.startswith('P2:')]
-            assert len(K) > 0, 'P2 is not included in %s' % self._image_files[index]
-            return np.array(K[0], dtype=np.float32)
+            assert len(K) > 0, 'P2 is not included in %s' % seq
+            P2 = np.array(K[0], dtype=np.float32).reshape(3, 4)
+            self._Ks[seq] = P2[:3, :3]
+            self._Ts[seq] = P2[:3, 3]
+            return P2[:3, :3], P2[:3, 3]
 
-    def _apply_mosaic(self, images, targets):
-        assert len(images) == 4 and len(targets) == 4
+    def _apply_padding(self, image, target):
         sw, sh = self._img_size
-        c = images[0].shape[2]
-        sum_rgb = np.zeros([images[0].ndim, ])
-        for img in images:
-            sum_rgb += np.array(cv2.mean(img))[:3]
-        mean_rgb = sum_rgb / len(images)
-        img4 = np.full((sh * 2, sw * 2, c), mean_rgb, dtype=np.uint8)  # base image with 4 tiles
-        offsets = [(0, 0), (sw, 0), (0, sh), (sw, sh)]
-        target4 = ParamList((sw, sh))
-        for i, img, target in zip(range(4), images, targets):
-            h, w, _ = img.shape
-            pad_w = int(sw - w) // 2
-            pad_h = int(sh - h) // 2
-            y_st = pad_h + offsets[i][1]
-            x_st = pad_w + offsets[i][0]
-            img4[y_st:y_st + h, x_st:x_st + w] = img
-            bbox = target.get_field('bbox')
-            bbox[:, 0::2] += x_st
-            bbox[:, 1::2] += y_st
-            target.update_field('bbox', bbox)
-            np.clip(bbox[:, 0::2], 0, 2 * sw, out=bbox[:, 0::2])  # use with random_affine
-            np.clip(bbox[:, 1::2], 0, 2 * sh, out=bbox[:, 1::2])
-            target4.merge(target)
-
-        raff = transforms.RandomAffine2D()
-
-        # img4 = cv2.resize(img4, (sw, sh), interpolation=cv2.INTER_LINEAR)
-        param = {
-            'border': (-sh//2, -sw//2)
-        }
-        param.update(self._aug_params)
-        return raff(img4, target4, **param)
-
-    def _apply_padding(self, images, targets):
-        img = images[0]
-        sw, sh = self._img_size
-        target = targets[0]
-        h, w, c = img.shape
-        mean_rgb = np.array(cv2.mean(img))[:3]
+        h, w, c = image.shape
+        mean_rgb = np.array(cv2.mean(image))[:3]
         nimg = np.full((sh, sw, c), mean_rgb, dtype=np.uint8)
         pad_w = int(sw - w) // 2
         pad_h = int(sh - h) // 2
-        bbox = target.get_field('bbox')
-        bbox[:, 0::2] += pad_w
-        bbox[:, 1::2] += pad_h
-        target.update_field('bbox', bbox)
-        nimg[pad_h:pad_h + h, pad_w:pad_w + w] = img
-        if target.has_field('K'):
-            K = target.get_field('K')
-            K[:, 2] += pad_w
-            K[:, 5] += pad_h
-            target.update_field("K", K)
+        nimg[pad_h:pad_h + h, pad_w:pad_w + w] = image
+        if target is not None:
+            if target.has_field('bbox'):
+                bbox = target.get_field('bbox')
+                bbox[:, 0::2] += pad_w
+                bbox[:, 1::2] += pad_h
+                target.update_field('bbox', bbox)
+            if target.has_field('K'):
+                K = target.get_field('K')
+                K[:, 2] += pad_w
+                K[:, 5] += pad_h
+                target.update_field("K", K)
 
         return nimg, target
 
@@ -220,19 +195,24 @@ class DatasetReader(Dataset):
                 noise_mask += [0]
         return np.array(dst_labels), np.array(noise_mask), repeats
 
-    def _build_targets(self, targets):
+    def _build_targets(self, targets, build_label=True):
         W, H = self._img_size[0] // 4, self._img_size[1] // 4
         outputs = ParamList(self._img_size, is_training=self.is_training)
+
+        down_ratio = self._config.MODEL.DOWN_SAMPLE
+        Ks = targets.get_field('K')
+        Ks[:, 0:6] /= down_ratio
+        outputs.add_field('K', Ks)
+
         outputs.copy_field(targets, ['img_id', 'class', 'noise_mask',
                                      'dimension', 'location', 'Ry', 'alpha'])
-        down_ratio = self._config.MODEL.DOWN_SAMPLE
+        if not build_label:
+            return outputs
         bboxes = targets.get_field('bbox') / down_ratio
         locations = targets.get_field('location')
         Rys = targets.get_field('Ry')
         dimensions = targets.get_field('dimension')
-        Ks = targets.get_field('K')
         N = Rys.shape[0]
-        Ks[:, 0:6] /= down_ratio
         vertexs, _, mask_3ds = kitti_utils.calc_proj2d_bbox3d(dimensions,
                                                               locations,
                                                               Rys,
@@ -253,7 +233,7 @@ class DatasetReader(Dataset):
         outputs.add_field('vertex', vertexs)
         outputs.add_field('v_coor_off', v_coor_offs)
         outputs.add_field('v_mask', v_masks)
-        outputs.add_field('K', Ks)
+
         if self._config.DATASET.GAUSSIAN_GEN_TYPE == 'dynamic_radius':
             gaussian_sigma, gaussian_radius = data_utils.dynamic_radius(bboxes)
         else:
@@ -284,38 +264,18 @@ class DatasetReader(Dataset):
 
     @staticmethod
     def collate_fn(batch):
-        img, target, path, shape, index = zip(*batch)  # transposed
+        img, target, index = zip(*batch)  # transposed
         ntarget = ParamList((None, None))
         for i, t in enumerate(target):
             id = t.get_field('img_id')
             id[:, ] = i
             t.update_field('img_id', id)
             ntarget.merge(t)
-        # ntarget.to_tensor()
-        return torch.stack(img, 0), ntarget, path, shape, torch.tensor(index, dtype=torch.long)
-
-
-def create_dataloader(path, cfg, transform=None, is_training=False, split='train'):
-    dr = DatasetReader(path, cfg, augment=transform, is_training=is_training, split=split)
-    batch_size = min(cfg.BATCH_SIZE, len(dr))
-    # nw = min([os.cpu_count(), batch_size if batch_size > 1 else 0, 20])  # number of workers
-    nw = cfg.num_workers
-    sampler = None
-    if hasattr(cfg, 'distributed') and cfg.distributed:
-        sampler = torch.utils.data.distributed.DistributedSampler(dr)
-
-    data_loader = torch.utils.data.DataLoader(dr,
-                                              batch_size=batch_size,
-                                              num_workers=nw,
-                                              pin_memory=True,
-                                              shuffle=(sampler is None),
-                                              collate_fn=DatasetReader.collate_fn,
-                                              sampler=sampler)
-    return data_loader, sampler, dr
+        return torch.stack(img, 0), ntarget, torch.tensor(index, dtype=torch.long)
 
 
 if __name__ == '__main__':
-    dr = DatasetReader('./datasets/data/kitti', None)
+    dr = SeqDatasetReader('./datasets/data/kitti', None)
 
     batch_size = min(2, len(dr))
     nw = min([os.cpu_count(), batch_size if batch_size > 1 else 0, 8])  # number of workers
@@ -323,6 +283,6 @@ if __name__ == '__main__':
                                              batch_size=batch_size,
                                              num_workers=nw,
                                              pin_memory=True,
-                                             collate_fn=DatasetReader.collate_fn)
+                                             collate_fn=SeqDatasetReader.collate_fn)
     for b_img, b_target in dataloader:
         print(dr)

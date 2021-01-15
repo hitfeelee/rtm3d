@@ -4,10 +4,13 @@
 /weights/
 /weights_multi_gpu/
 /logdirs/
+/models/pretrained
+/tests/tmp
 .idea
 *.py[cod]
 *.avi
 *.mp4
+temp.py
 tmp.py
 *.pt
 *.onnx

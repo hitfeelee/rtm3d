@@ -1,12 +1,12 @@
 # rtm3d
-Perform 3D object detection base on anchor-free. rtm3d on main branch , smoke on smoke branch.
+Perform 3D object detection base on anchor-free. rtm3d on main branch, smoke on smoke branch.
 There are many changes both rtm3d and smoke, and main keypoint heatmap in smoke base on rtm3d. 
-Train smoke also base on rtm3d. But multi gpu training in smoke exits bug now.
+Train smoke also base on rtm3d.
 
 
 ## Quick Start
 ### datasets
-Applying kitt dataset. Place [kitti_dev](https://github.com/hitfee01/kitti_dev) sub contents to datasets/data/kitti/ of this project.
+Applying kitt dataset. Place [kitti_dev](https://github.com/hitfeelee/kitti_dev) sub contents to datasets/data/kitti/ of this project.
 
 Please place it as following:
 

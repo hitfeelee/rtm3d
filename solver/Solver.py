@@ -3,6 +3,14 @@ import torch.nn as nn
 from solver.OptimizerBuilder import *
 from fvcore.common.config import CfgNode
 
+try:
+    from apex.parallel import DistributedDataParallel as DDP
+    from apex.fp16_utils import *
+    from apex import amp, optimizers
+    from apex.multi_tensor_apply import multi_tensor_applier
+except ImportError:
+    raise ImportError("Please install apex from https://www.github.com/nvidia/apex to run this example.")
+
 
 class Solver(nn.Module):
 
@@ -50,7 +58,18 @@ class Solver(nn.Module):
     def learn_rate(self):
         return self._optimizer.param_groups[self._best_param_group_id]["lr"]
 
-    def load_state_dict(self, state_dict:dict):
+    def apply_apex(self, model):
+        # Initialize Amp.  Amp accepts either values or strings for the optional override arguments,
+        # for convenient interoperation with argparse.
+        model, optimizer = amp.initialize(model, self._optimizer,
+                                          opt_level=self._configs.opt_level,
+                                          keep_batchnorm_fp32=self._configs.keep_batchnorm_fp32,
+                                          loss_scale=self._configs.loss_scale
+                                          )
+        self._optimizer = optimizer
+        return model
+
+    def load_state_dict(self, state_dict: dict):
         self._best_param_group_id = state_dict.pop('best_param_group_id') \
             if 'best_param_group_id' in state_dict else self._best_param_group_id
         if 'optimizer' in state_dict:
@@ -62,6 +81,9 @@ class Solver(nn.Module):
             self.scheduler.load_state_dict(cp)
             self.optimizer.step()
             self.scheduler.step()
+        if self._configs.apex and 'amp' in state_dict:
+            cp = state_dict.pop('amp')
+            amp.load_state_dict(cp)
 
     def state_dict(self):
         state = {
@@ -71,6 +93,8 @@ class Solver(nn.Module):
                 'last_epoch': self._scheduler.last_epoch
             }
         }
+        if self._configs.apex:
+            state.update(**{'amp': amp.state_dict()})
         return state
     
     def step(self, losses_dict):
@@ -82,7 +106,11 @@ class Solver(nn.Module):
         else:
             raise Exception("Loss go wrong.")
         self._optimizer.zero_grad()
-        losses.backward()
+        if self._configs.apex:
+            with amp.scale_loss(losses, self._optimizer) as scaled_loss:
+                scaled_loss.backward()
+        else:
+            losses.backward()
         self._optimizer.step()
         # self._optimizer.zero_grad()
         self._scheduler.step()

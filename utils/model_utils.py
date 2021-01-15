@@ -5,12 +5,12 @@ import torch
 from scipy.optimize import minimize
 import scipy.optimize as optimize
 from utils.ParamList import ParamList
+import torch.nn as nn
 
 
 def sigmoid_hm(hm_features):
     x = hm_features.sigmoid_()
-    x = x.clamp(min=1e-4, max=1 - 1e-4)
-
+    x = x.clamp(min=1e-4, max=(0.9995 if x.dtype == torch.float16 else 0.9999))
     return x
 
 
@@ -21,7 +21,7 @@ def nms_hm(heat_map, kernel=3):
                         kernel_size=(kernel, kernel),
                         stride=1,
                         padding=pad)
-    eq_index = (hmax == heat_map).float()
+    eq_index = (hmax == heat_map).type_as(heat_map)
 
     return heat_map * eq_index
 

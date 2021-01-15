@@ -61,18 +61,20 @@ def detect(model, dataset, cfg):
             for i in range(Bs):
                 NKs[i] = Ks[img_ids == i][0:1, :]
             NKs = torch.cat(NKs, dim=0).to(cfg.DEVICE)
+            invKs = NKs.view(-1, 3, 3).inverse()
             # Set host input to the image. The trt_utils.do_inference function will copy the input to the GPU before executing.
             nh, nw = int(h // cfg.MODEL.DOWN_SAMPLE), int(w // cfg.MODEL.DOWN_SAMPLE)
-            output_shapes = [[1, num_classes, nh, nw], [1, 8*2, nh, nw], [1, 2, nh, nw], [1, 6, nh, nw]]
+            output_shapes = [[1, num_classes, nh, nw], [1, 8, nh, nw]]
             inputs[0].host = imgs
             t1 = time.time()
             trt_outputs = trt_utils.do_inference_v2(context, bindings=bindings, inputs=inputs, outputs=outputs, stream=stream)
             trt_outputs = [torch.from_numpy(output.reshape(shape)).to(cfg.DEVICE) for output, shape in zip(trt_outputs, output_shapes)]
-            preds = model.inference(trt_outputs, NKs)
+            preds = model.inference(trt_outputs, invKs)
             t2 = time.time()
             mem = '%.3gG' % (torch.cuda.memory_cached() / 1E9 if torch.cuda.is_available() else 0)  # (GB)
             s = ('%10s' + '%10.4g' * 2) % (mem, targets.get_field('mask').shape[0], t2 - t1)
             pbar.set_description(s)
+            Ks = NKs
             H, W, _ = src.shape
             bird_view = np.zeros((H, H, 3), dtype=np.uint8)
             src_bv = np.copy(bird_view)

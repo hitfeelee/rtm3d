@@ -19,21 +19,16 @@ class Model(nn.Module):
         self.export = False
         torch_utils.initialize_weights(self)
 
-    def forward(self, x, Ks=None):
-        t1 = time.time()
+    def forward(self, x, invKs=None):
         x = self.backbone(x)
-        t2 = time.time()
         x = self.kfpn_fusion(x)
-        t3 = time.time()
         pred_logits = self.detect_header(x)
-        t4 = time.time()
-        print('time:' + ' %6g' * 3 % (t2 - t1, t3 - t2, t4 - t3))
         if self.training or self.export:
             return pred_logits
         else:
-            return self.inference([p.clone() for p in pred_logits], Ks), pred_logits
+            return self.inference([p.clone() for p in pred_logits], invKs), pred_logits
 
-    def inference(self, pred_logits, Ks):
+    def inference(self, pred_logits, invKs):
         main_kf_logits = pred_logits[0]
         offset_fr_main_logits, main_offset_kf_logits, pred3d_logits = pred_logits[1:]
         Bs = main_kf_logits.shape[0]
@@ -44,13 +39,13 @@ class Model(nn.Module):
                                                                       self.config.DETECTOR.TOPK_CANDIDATES)
             if len(clses_i) == 0:
                 continue
-            K_i = Ks[i:i+1].repeat(len(clses_i), 1).view(-1, 3, 3)
+            K_i = invKs[i:i+1].repeat(len(clses_i), 1, 1)
             offsets_fr_main_i = self._obtain_offset_fr_main(offset_fr_main_logits[i], m_projs_i)
             m_projs_offset_i = main_offset_kf_logits[i][:, m_projs_i[1].long(), m_projs_i[0].long()].sigmoid_()
             m_projs_i = torch.cat([m_projs_i[0].unsqueeze(-1), m_projs_i[1].unsqueeze(-1)], dim=-1)
             m_projs_offset_i = torch.cat([m_projs_offset_i[0].unsqueeze(-1), m_projs_offset_i[1].unsqueeze(-1)], dim=-1)
             pred_dims_i, pred_locs_i, pred_rys_i, pred_alpha_i = self.smoke_encoder.decode_smoke_pred3d_logits_eval(
-                i, m_projs_i.long(), m_projs_offset_i, clses_i, pred3d_logits, K_i)
+                i, m_projs_i, m_projs_offset_i, clses_i, pred3d_logits, K_i)
 
             m_projs_i += m_projs_offset_i
             v_projs_i = offsets_fr_main_i.permute(1, 0, 2).contiguous() + m_projs_i.view(-1, 1, 2)
@@ -68,12 +63,15 @@ class Model(nn.Module):
 
         return results
 
-    # def fuse(model):
-    #     for m in model.modules():
-    #         if type(m) is Conv:
-    #             m.conv = torch_utils.fuse_conv_and_bn(m.conv, m.bn)  # update conv
-    #             m.bn = None  # remove batchnorm
-    #             m.forward = m.fuseforward  # update forward
+    def fuse(model):
+        for m in model.modules():
+            print(type(m))
+            if type(m) == RTM3DHeader:
+                m.fuse()
+            # if type(m) is Conv:
+            #     m.conv = torch_utils.fuse_conv_and_bn(m.conv, m.bn)  # update conv
+            #     m.bn = None  # remove batchnorm
+            #     m.forward = m.fuseforward  # update forward
 
     def _obtain_main_proj2d(self, main_kf_logits, confidence, topK=30):
         '''
@@ -96,7 +94,7 @@ class Model(nn.Module):
         xy = indices % (H * W)
         y = xy // W
         x = xy % W
-        return cls, scores, [x.to(torch.float32), y.to(torch.float32)]
+        return cls, scores, [x.type_as(main_kf_logits), y.type_as(main_kf_logits)]
 
     def _obtain_offset_fr_main(self, offset_fr_main_logits, main_projs):
         '''

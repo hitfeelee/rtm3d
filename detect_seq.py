@@ -2,7 +2,7 @@ import argparse
 import os
 from models import model_factory
 from models.configs.detault import CONFIGS as config
-from datasets.dataset_reader import DatasetReader
+from datasets.dataset_seq_reader import SeqDatasetReader
 from preprocess.data_preprocess import TestTransform
 import torch
 from utils import check_point
@@ -25,8 +25,8 @@ def setup(args):
     device = torch.device(cfg.DEVICE) if torch.cuda.is_available() else torch.device('cpu')
     cfg.update({'DEVICE': device})
     model = model_factory.create_model(cfg)
-    dataset = DatasetReader(cfg.DATASET.PATH, cfg,
-                            augment=TestTransform(cfg.INPUT_SIZE[0]), is_training=False, split='test')
+    dataset = SeqDatasetReader(cfg.DATASET.PATH, cfg,
+                            augment=TestTransform(cfg.INPUT_SIZE[0]), is_training=False, split='testing')
     model.to(device)
     model.eval()
     return model, dataset, cfg
@@ -48,36 +48,29 @@ def detect(model, dataset, cfg):
     print(('\n' + '%10s' * 3) % ('mem', 'targets', 'time'))
     # videowriter = cv2.VideoWriter('rtm3d_detect.mp4', cv2.VideoWriter.fourcc(*'mp4v'), 1, (848, 624),True)
     half = cfg.DEVICE.type != 'cpu'
-    # half = False
+    half = False
     # model.fuse()
     if half:
         model.half()
-    for imgs, targets, paths, _,_ in pbar:
+    for imgs, targets, index in pbar:
         src = imgs.clone().permute(1, 2, 0).contiguous().cpu().numpy()
         src = (src * dataset._norm_params['std_rgb'] + dataset._norm_params['mean_rgb']) * 255
         src = src.astype(np.uint8)
         imgs = imgs.unsqueeze(dim=0).to(cfg.DEVICE)
-        img_ids = targets.get_field('img_id')
         Ks = targets.get_field('K')
-        Bs = imgs.shape[0]
-        NKs = [None] * Bs
-        for i in range(Bs):
-            NKs[i] = Ks[img_ids == i][0:1, :]
-        NKs = torch.cat(NKs, dim=0)
-        NKs = NKs.to(cfg.DEVICE)
-        invKs = NKs.view(-1, 3, 3).inverse()
+        Ks = Ks.to(cfg.DEVICE)
+        invKs = Ks.view(-1, 3, 3).inverse()
         if half:
             imgs = imgs.half()
             invKs = invKs.half()
-            NKs = NKs.half()
+            Ks = Ks.half()
         with torch.no_grad():
             t1 = time.time()
             preds = model(imgs, invKs=invKs)[0]
             t2 = time.time()
         mem = '%.3gG' % (torch.cuda.memory_cached() / 1E9 if torch.cuda.is_available() else 0)  # (GB)
-        s = ('%10s' + '%10.4g' * 2) % (mem, targets.get_field('mask').shape[0], t2-t1)
+        s = ('%10s' + '%10.4g' * 2) % (mem, targets.get_field('K').shape[0], t2-t1)
         pbar.set_description(s)
-        Ks = NKs
         H, W, _ = src.shape
         bird_view = np.zeros((H, H, 3), dtype=np.uint8)
         src_bv = np.copy(bird_view)
@@ -100,27 +93,27 @@ def detect(model, dataset, cfg):
             pred_out.add_field('vertex', pred[:, 14:].reshape(-1, 8, 2))
             pred_out.add_field('K', K.reshape(1, 9).repeat((pred.shape[0]), axis=0))
 
-            targ = ParamList.ParamList(targets.size, is_training=False)
-            targ.copy_field(targets, ['mask', 'class', 'noise_mask',
-                                         'dimension', 'location', 'Ry', 'alpha'])
-            m_mask = targ.get_field('mask').bool()
-            noise_mask = targ.get_field('noise_mask')
-            m_mask &= noise_mask.bool().bitwise_not()
-            targ.update_field('mask', m_mask)
-            N = m_mask.float().sum()
-            targ.delete_by_mask()
-            targ = targ.numpy()
-            targ.update_field('K', K.reshape(1, 9).repeat((N,), axis=0))
+            # targ = ParamList.ParamList(targets.size, is_training=False)
+            # targ.copy_field(targets, ['mask', 'class', 'noise_mask',
+            #                           'dimension', 'location', 'Ry', 'alpha'])
+            # m_mask = targ.get_field('mask').bool()
+            # noise_mask = targ.get_field('noise_mask')
+            # m_mask &= noise_mask.bool().bitwise_not()
+            # targ.update_field('mask', m_mask)
+            # N = m_mask.float().sum()
+            # targ.delete_by_mask()
+            # targ = targ.numpy()
+            # targ.update_field('K', K.reshape(1, 9).repeat((N,), axis=0))
             optim_out = model_utils.optim_decode_bbox3d(pred_out, K)
 
             visual_utils.cv_draw_bboxes_3d_kitti(src, pred_out,
                                                  label_map=cfg.DATASET.OBJs)
             visual_utils.cv_draw_bbox3d_birdview(src_bv, pred_out, color=(255, 0, 0))
-            visual_utils.cv_draw_bbox3d_birdview(src_bv, targ, color=(0, 0, 255))
+            # visual_utils.cv_draw_bbox3d_birdview(src_bv, targ, color=(0, 0, 255))
             visual_utils.cv_draw_bboxes_3d_kitti(src_optim, optim_out,
                                                  label_map=cfg.DATASET.OBJs)
             visual_utils.cv_draw_bbox3d_birdview(src_optim_bv, optim_out, color=(255, 0, 0))
-            visual_utils.cv_draw_bbox3d_birdview(src_optim_bv, targ, color=(0, 0, 255))
+            # visual_utils.cv_draw_bbox3d_birdview(src_optim_bv, targ, color=(0, 0, 255))
             visual_utils.cv_draw_bbox3d_rtm3d(src_vertex_reg,
                                               pred_out.get_field('class'),
                                               pred_out.get_field('score'),
@@ -133,7 +126,7 @@ def detect(model, dataset, cfg):
         kf = cv2.resize(kf, (kf.shape[1] // 2, kf.shape[0] // 2))
         cv2.imshow('rtm3d_detect', kf)
         # videowriter.write(kf)
-        key = cv2.waitKey(100)
+        key = cv2.waitKey(1)
         if key & 0xff == ord('q'):
             break
     cv2.destroyAllWindows()

@@ -52,15 +52,15 @@ def align_and_update_state_dicts(model_state_dict, loaded_state_dict):
         key = current_keys[idx_new]
         key_old = loaded_keys[idx_old]
         model_state_dict[key] = loaded_state_dict[key_old]
-        logger.info(
-            log_str_template.format(
-                key,
-                max_size,
-                key_old,
-                max_size_loaded,
-                tuple(loaded_state_dict[key_old].shape),
-            )
-        )
+        # logger.info(
+        #     log_str_template.format(
+        #         key,
+        #         max_size,
+        #         key_old,
+        #         max_size_loaded,
+        #         tuple(loaded_state_dict[key_old].shape),
+        #     )
+        # )
 
 
 def strip_prefix_if_present(state_dict, prefix):
@@ -175,8 +175,7 @@ class CheckPointer(object):
             f.write(last_filename)
 
     def _load_file(self, f):
-        fm = (lambda storage, loc: storage) if self.device.type == 'cpu' else (lambda storage, loc: storage.cuda(self.device))
-        return torch.load(f, map_location=fm)
+        return torch.load(f)
 
     def _load_model(self, checkpoint):
         load_state_dict(self.model, checkpoint["model"] if 'model' in checkpoint else checkpoint)
@@ -193,4 +192,23 @@ class CheckPointer(object):
                 solver_name_old = cp['solver_name']
             if solver_name == solver_name_old:
                 self.solver.load_state_dict(cp)
+
+    def load_solver_multi_gpu(self, f, use_latest=True):
+        if self.has_checkpoint() and use_latest:
+            # override argument with existing checkpoint
+            f = self.get_checkpoint_file()
+        if not f:
+            # no checkpoint could be found
+            self.logger.info("No checkpoint found. Initializing model from scratch")
+            return {}
+        ckpt = torch.load(f, map_location=self.device)
+        if "solver" in ckpt:
+            solver_name = self.solver.solver_name
+            cp = ckpt["solver"]
+            solver_name_old = 'Adam'
+            if 'solver_name' in cp:
+                solver_name_old = cp['solver_name']
+            if solver_name == solver_name_old:
+                self.solver.load_state_dict(cp)
+        del ckpt
 
