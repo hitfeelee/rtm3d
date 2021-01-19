@@ -46,15 +46,21 @@ class SeqDatasetReader(Dataset):
             transforms.ToTensor(),
             transforms.ToNCHW()
         ])
+        self._start_index = 0
+
+    def set_start_index(self, start_index):
+        self._start_index = start_index
 
     @property
     def samples(self):
         return self._samples
 
     def __len__(self):
-        return len(self._samples)
+        return len(self._samples) - self._start_index - 1
 
     def __getitem__(self, index):
+        index += self._start_index
+        assert index < len(self._samples), 'out of bounds !'
         img = self.load_image(index)
         target = ParamList((img.shape[1], img.shape[0]))
         K, T = self.load_calib_param(index)

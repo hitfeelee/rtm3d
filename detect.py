@@ -13,7 +13,7 @@ import time
 from utils import visual_utils
 from utils import model_utils
 from utils import ParamList
-
+from fvcore.common.config import CfgNode
 
 os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 
@@ -22,6 +22,8 @@ def setup(args):
     cfg = config.clone()
     if len(args.model_config) > 0:
         cfg.merge_from_file(args.model_config)
+    opt = CfgNode(args.__dict__)
+    cfg.merge_from_other_cfg(opt)
     device = torch.device(cfg.DEVICE) if torch.cuda.is_available() else torch.device('cpu')
     cfg.update({'DEVICE': device})
     model = model_factory.create_model(cfg)

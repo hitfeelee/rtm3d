@@ -48,7 +48,7 @@ def detect(model, dataset, cfg):
         print(('\n' + '%10s' * 3) % ('mem', 'targets', 'time'))
         # videowriter = cv2.VideoWriter('rtm3d_detect.mp4', cv2.VideoWriter.fourcc(*'mp4v'), 1, (848, 624),True)
         num_classes = len(cfg.DATASET.OBJs)
-        for imgs, targets, paths, _ in pbar:
+        for imgs, targets, paths, _, _ in pbar:
             src = imgs.clone().permute(1, 2, 0).contiguous().cpu().numpy()
             src = (src * dataset._norm_params['std_rgb'] + dataset._norm_params['mean_rgb']) * 255
             src = src.astype(np.uint8)

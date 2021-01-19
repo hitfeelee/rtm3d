@@ -49,7 +49,7 @@ def export_onnx(model, dataset, cfg):
     del ckpt
     w, h = dataset._img_size
     # img = torch.rand(1, 3, h, w).to(cfg.DEVICE)
-    img, targets, _, _ = dataset[0]
+    img, targets, _, _, _ = dataset[0]
     img = img.unsqueeze(dim=0).to(cfg.DEVICE)
     half = cfg.DEVICE.type != 'cpu'
     half = False

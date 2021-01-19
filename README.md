@@ -59,9 +59,7 @@ Please place it as following:
      python export_onnx.py --model-config ./models/configs/rtm3d_resnet18_kitti.yaml
     
 ## Pretrained Model
-We provide a set of trained models available for download in the  [Pretrained Model](https://pan.baidu.com/s/1oetT70cTJbwXgPjVdpUQ0A).
-提取码: qu2u
-
+We provide a set of trained models available for download in the  [Pretrained Model](https://pan.baidu.com/s/1NpR3Yfbajyelq9oNn0hDOQ).
 ## License
 MIT
 

@@ -13,7 +13,7 @@ import time
 from utils import visual_utils
 from utils import model_utils
 from utils import ParamList
-
+from fvcore.common.config import CfgNode
 
 os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 
@@ -22,11 +22,13 @@ def setup(args):
     cfg = config.clone()
     if len(args.model_config) > 0:
         cfg.merge_from_file(args.model_config)
+    opt = CfgNode(args.__dict__)
+    cfg.merge_from_other_cfg(opt)
     device = torch.device(cfg.DEVICE) if torch.cuda.is_available() else torch.device('cpu')
     cfg.update({'DEVICE': device})
     model = model_factory.create_model(cfg)
     dataset = SeqDatasetReader(cfg.DATASET.PATH, cfg,
-                            augment=TestTransform(cfg.INPUT_SIZE[0]), is_training=False, split='testing')
+                            augment=TestTransform(cfg.INPUT_SIZE[0]), is_training=False, split='training')
     model.to(device)
     model.eval()
     return model, dataset, cfg
@@ -43,10 +45,14 @@ def detect(model, dataset, cfg):
 
     ckpt = checkpointer.load(cfg.DETECTOR.CHECKPOINT, use_latest=False)
     del ckpt
+    dataset.set_start_index(0)
     nb = len(dataset)
     pbar = tqdm.tqdm(dataset, total=nb)  # progress bar
     print(('\n' + '%10s' * 3) % ('mem', 'targets', 'time'))
-    # videowriter = cv2.VideoWriter('rtm3d_detect.mp4', cv2.VideoWriter.fourcc(*'mp4v'), 1, (848, 624),True)
+    if cfg.record:
+        encode = {'mp4': 'mp4v', 'avi': 'MJPG'}
+        videowriter = cv2.VideoWriter('rtm3d_detect.{}'.format(cfg.video_format),
+                                      cv2.VideoWriter.fourcc(*encode[cfg.video_format]), 20, (822, 208), True)
     half = cfg.DEVICE.type != 'cpu'
     # half = False
     # model.fuse()
@@ -72,7 +78,8 @@ def detect(model, dataset, cfg):
         s = ('%10s' + '%10.4g' * 2) % (mem, targets.get_field('K').shape[0], t2-t1)
         pbar.set_description(s)
         H, W, _ = src.shape
-        bird_view = np.zeros((H, H, 3), dtype=np.uint8)
+        ratio = 70./80.
+        bird_view = np.zeros((H, int(H * ratio), 3), dtype=np.uint8)
         src_bv = np.copy(bird_view)
 
         if preds[0] is not None:
@@ -103,22 +110,26 @@ def detect(model, dataset, cfg):
             visual_utils.cv_draw_bboxes_3d_kitti(src, pred_out,
                                                  label_map=cfg.DATASET.OBJs)
             # visual_utils.cv_draw_bbox3d_birdview(src_bv, targ, color=(0, 0, 255))
-            visual_utils.cv_draw_bbox3d_birdview(src_bv, pred_out, color=(0, 255, 0))
+            visual_utils.cv_draw_bbox3d_birdview(src_bv, pred_out, color=(0, 255, 0), scaleX=0.2, scaleY=0.2)
 
         kf = np.concatenate([src, src_bv], axis=1)
         kf = cv2.resize(kf, (kf.shape[1] // 2, kf.shape[0] // 2))
         cv2.imshow('rtm3d_detect', kf)
-        # videowriter.write(kf)
-        key = cv2.waitKey(10)
+        if cfg.record:
+            videowriter.write(kf)
+        key = cv2.waitKey(1)
         if key & 0xff == ord('q'):
             break
     cv2.destroyAllWindows()
-    # videowriter.release()
+    if cfg.record:
+        videowriter.release()
 
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="RTM3D Detecting")
     parser.add_argument("--model-config", default="", help="specific model config path")
+    parser.add_argument("--record", action='store_true', help="record detection result as video")
+    parser.add_argument("--video_format", type=str, default='mp4', help="specific video formate, such as 'mp4', 'avi' ")
     args = parser.parse_args()
     model, dataset, cfg = setup(args)
     detect(model, dataset, cfg)
