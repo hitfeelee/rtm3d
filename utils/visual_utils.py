@@ -72,22 +72,50 @@ def cv_draw_bboxes_3d(img, bboxes_3d, label_map=None, color_map=KITTI_COLOR_MAP)
     return img
 
 
-def cv_draw_bboxes_3d_kitti(img, bboxes_3d, label_map=None, color_map=KITTI_COLOR_MAP, draw_bbox2d=False):
+def cv_draw_bboxes_3d_kitti(img, bboxes_3d, label_map=None, color_map=KITTI_COLOR_MAP, draw_bbox2d=False,
+                            show_score=False,show_id=False,show_depth=False):
     bboxes_3d_array = bboxes_3d.numpy()
     classes = bboxes_3d_array.get_field('class').astype(np.int)
     N = len(classes)
-    scores = bboxes_3d_array.get_field('score') if bboxes_3d_array.has_field('score') else np.ones((N,), dtype=np.int)
+
     locations = bboxes_3d_array.get_field('location')
     Rys = bboxes_3d_array.get_field('Ry')
     dimensions = bboxes_3d_array.get_field('dimension')
     Ks = bboxes_3d_array.get_field('K')
-    proj2des, bboxes_2d, _ = kitti_utils.calc_proj2d_bbox3d(dimensions, locations, Rys, Ks.reshape(N, 3, 3))
 
-    for cls, score, proj2d, loc, bbox in zip(classes, scores, proj2des, locations, bboxes_2d):
-        label = label_map[cls] if label_map is not None else cls
-        cv_draw_bbox_3d_kitti(img, label, score, proj2d.T.astype(np.int), loc,  color_map[cls], thickness=2)
+    proj2des, bboxes_2d, _ = kitti_utils.calc_proj2d_bbox3d(dimensions, locations, Rys, Ks.reshape(N, 3, 3))
+    args = [classes, proj2des]
+    if draw_bbox2d:
+        args.append(bboxes_2d)
+    if show_score:
+        scores = bboxes_3d_array.get_field('score') if bboxes_3d_array.has_field('score') else np.ones((N,),
+                                                                                                       dtype=np.int)
+        args.append(scores)
+    if show_depth:
+        args.append(locations[:, 2])
+    if show_id:
+        IDs = bboxes_3d_array.get_field('ID').astype(np.int)
+        args.append(IDs)
+    for arg in zip(*args):
+        label = label_map[arg[0]] if label_map is not None else arg[0]
+        opt_indx = 2
         if draw_bbox2d:
-            plot_one_box(bbox, img, color=color_map[cls], label=label, line_thickness=2)
+            plot_one_box(arg[opt_indx], img, color=color_map[arg[0]], label=label, line_thickness=2)
+            opt_indx += 1
+        shows = [None] * 3
+        for i, show in enumerate([show_score, show_depth, show_id]):
+            if show:
+                shows[i] = arg[opt_indx]
+                opt_indx += 1
+        label_prex, label_tail = label, ''
+        if show_id:
+            label_prex += ("<" + str(shows[2]) + ">")
+        for i, show in enumerate([show_score, show_depth]):
+            if show:
+                label_tail += '/{:.2f}'.format(shows[i]) if len(label_tail) > 0 else '{:.2f}'.format(shows[i])
+        label = label_prex if len(label_tail) == 0 else (label_prex + ':' + label_tail)
+        cv_draw_bbox_3d_kitti(img, arg[1].T.astype(np.int), label,  color_map[arg[0]], thickness=2)
+
     return img
 
 
@@ -127,7 +155,7 @@ def cv_draw_bbox_3d(img, proj_matrix, ry, dimension, center, cls, score, color, 
                 [225, 255, 255], thickness=tf, lineType=cv2.LINE_AA)
 
 
-def cv_draw_bbox_3d_kitti(img, cls, score, proj_2d, center=None, color=(0, 0, 255), thickness=1):
+def cv_draw_bbox_3d_kitti(img, proj_2d, label=None, color=(0, 0, 255), thickness=1):
     tl = thickness or round(
         0.002 * (img.shape[0] + img.shape[1]) / 2) + 1  # line/font thickness
     # to see the corners on image as red circles
@@ -151,16 +179,15 @@ def cv_draw_bbox_3d_kitti(img, cls, score, proj_2d, center=None, color=(0, 0, 25
     res = rate * img.astype(np.float) + (1 - rate) * mask.astype(np.float)
     np.copyto(img, res.astype(np.uint8))
 
-    label = '{}:({:.2f},{:.2f},{:.2f})'.format(cls, center[0], center[1], center[2]) if center is not None else \
-        '{}'.format(cls)
-    tf = max(tl - 1, 1)  # font thickness
-    t_size = cv2.getTextSize(label, 0, fontScale=tl / 3, thickness=tf)[0]
-    box_3d = np.array(proj_2d).min(axis=0)
-    c1 = (box_3d[0], box_3d[1])
-    c2 = (c1[0] + t_size[0], c1[1] - t_size[1] - 3)
-    cv2.rectangle(img, c1, c2, color, -1, cv2.LINE_AA)  # filled
-    cv2.putText(img, label, (c1[0], c1[1] - 2), 0, tl / 3,
-                [225, 255, 255], thickness=tf, lineType=cv2.LINE_AA)
+    if label is not None:
+        tf = max(tl - 1, 1)  # font thickness
+        t_size = cv2.getTextSize(label, 0, fontScale=tl / 3, thickness=tf)[0]
+        box_3d = np.array(proj_2d).min(axis=0)
+        c1 = (box_3d[0], box_3d[1])
+        c2 = (c1[0] + t_size[0], c1[1] - t_size[1] - 3)
+        cv2.rectangle(img, c1, c2, color, -1, cv2.LINE_AA)  # filled
+        cv2.putText(img, label, (c1[0], c1[1] - 2), 0, tl / 3,
+                    [225, 255, 255], thickness=tf, lineType=cv2.LINE_AA)
 
 
 def cv_draw_bbox3d_birdview(img, bboxes_3d, scaleX=0.2, scaleY=0.2, color=(255, 0, 0)):

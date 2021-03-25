@@ -1,7 +1,7 @@
 import argparse
 from utils import utils
 import yaml
-from datasets.dataset_reader import DatasetReader, create_dataloader
+from datasets.dataset_reader_nuscene_kitti import DatasetReader, create_dataloader
 import os
 from preprocess.data_preprocess import TrainAugmentation
 import random
@@ -15,7 +15,7 @@ from fvcore.common.config import CfgNode
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('--model-config', type=str, default='./models/configs/rtm3d_dla34_kitti.yaml')
+    parser.add_argument('--model-config', type=str, default='./models/configs/rtm3d_resnet_nuscene.yaml')
     parser.add_argument('--num-workers', default=4, type=int,
                         help='the num of threads for data.')
     args = parser.parse_args()
@@ -27,22 +27,22 @@ if __name__ == '__main__':
     cfg.merge_from_other_cfg(opt)
 
     brg_mean = config.DATASET.MEAN
-    dr = DatasetReader(config.DATASET.PATH,  cfg, TrainAugmentation(cfg.INPUT_SIZE[0], mean=brg_mean))
+    # dr = DatasetReader(config.DATASET.PATH,  cfg, TrainAugmentation(cfg.INPUT_SIZE[0], mean=brg_mean))
     dataloader, _, dr = create_dataloader(config.DATASET.PATH, cfg,
                                           transform=TrainAugmentation(cfg.INPUT_SIZE[0], mean=brg_mean), is_training=True)
     batch_size = min(1, len(dr))
-    nw = min([os.cpu_count(), batch_size if batch_size > 1 else 0, 8])  # number of workers
+    nw = min([os.cpu_count(), batch_size if batch_size > 1 else 1, 8])  # number of workers
     names = cfg.DATASET.OBJs
     colors = [[random.randint(0, 255) for _ in range(3)] for _ in range(len(names))]
 
-    for img, target, path, _ in dataloader:
+    for img, target, path, _, _ in dataloader:
         # img_name = path.split('/')[-1][:-4]
         target.to_tensor()
         h, w = img.shape[2:]
         src = img[0].permute(1, 2, 0).cpu().numpy()
         src = (src * dr._norm_params['std_rgb'] + dr._norm_params['mean_rgb']) * 255
         src = src.astype(np.uint8)
-        src_ver = np.copy(src)
+        # src_ver = np.copy(src)
 
         hm_m = target.get_field('m_hm')
         hm_m = hm_m[0].permute(1, 2, 0).contiguous().cpu().numpy() * 255
@@ -68,11 +68,11 @@ if __name__ == '__main__':
         # for x, y in zip(xs, ys):
         #     cv2.circle(src_ver, (x*4, y*4), 2, (0, 0, 255), thickness=-1)
         # cv2.putText(src, img_name, (50, 50), 0, 2, (0, 0, 255), 2)
-        res = np.concatenate([src, src_ver], axis=0)
+        # res = np.concatenate([src, src_ver], axis=0)
         # res = cv2.resize(res, (w, h))
-        cv2.imshow('test result', res)
+        cv2.imshow('test result', src)
 
-        key = cv2.waitKey(100)
+        key = cv2.waitKey(2000)
         if key == 'q':
             break
 

@@ -22,6 +22,7 @@ class Model(nn.Module):
     def forward(self, x, invKs=None):
         x = self.backbone(x)
         x = self.kfpn_fusion(x)
+
         pred_logits = self.detect_header(x)
         if self.training or self.export:
             return pred_logits
@@ -37,14 +38,14 @@ class Model(nn.Module):
             clses_i, m_scores_i, m_projs_i = self._obtain_main_proj2d(main_kf_logits[i],
                                                                       self.config.DETECTOR.SCORE_THRESH,
                                                                       self.config.DETECTOR.TOPK_CANDIDATES)
-            if len(clses_i) == 0:
-                continue
-            K_i = invKs[i:i+1].repeat(len(clses_i), 1, 1)
 
+            if len(clses_i) == 0 or invKs[i] is None:
+                continue
+            K_i = invKs[i].repeat(len(clses_i), 1, 1)
             m_projs_offset_i = regress_logits[i][:2, m_projs_i[1].long(), m_projs_i[0].long()].sigmoid_()
             m_projs_i = torch.cat([m_projs_i[0].unsqueeze(-1), m_projs_i[1].unsqueeze(-1)], dim=-1)
             m_projs_offset_i = torch.cat([m_projs_offset_i[0].unsqueeze(-1), m_projs_offset_i[1].unsqueeze(-1)], dim=-1)
-            pred_dims_i, pred_locs_i, pred_rys_i, pred_alpha_i = self.smoke_encoder.decode_smoke_pred3d_logits_eval(
+            pred_dims_i, pred_locs_i, pred_rys_i, pred_alpha_i = self.smoke_encoder.decode_smoke_pred3d_logits(
                 i, m_projs_i, m_projs_offset_i, clses_i, regress_logits[:, 2:, :, :], K_i)
 
             m_projs_i += m_projs_offset_i

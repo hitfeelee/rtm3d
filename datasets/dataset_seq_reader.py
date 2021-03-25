@@ -56,11 +56,11 @@ class SeqDatasetReader(Dataset):
         return self._samples
 
     def __len__(self):
-        return len(self._samples) - self._start_index - 1
+        return len(self._samples) - self._start_index
 
     def __getitem__(self, index):
         index += self._start_index
-        assert index < len(self._samples), 'out of bounds !'
+        assert index < len(self._samples), 'out of bounds index = %s !' % index
         img = self.load_image(index)
         target = ParamList((img.shape[1], img.shape[0]))
         K, T = self.load_calib_param(index)
@@ -222,7 +222,10 @@ class SeqDatasetReader(Dataset):
         vertexs, _, mask_3ds = kitti_utils.calc_proj2d_bbox3d(dimensions,
                                                               locations,
                                                               Rys,
-                                                              Ks.reshape(-1, 3, 3))
+                                                              Ks.reshape(-1, 3, 3),
+                                                              xrange=(-200, self._img_size[0] + 200),
+                                                              yrange=(-200, self._img_size[1] + 200)
+                                                              )
         vertexs = np.ascontiguousarray(np.transpose(vertexs, axes=[0, 2, 1]))
         centers = vertexs[:, -1]
         vertexs = vertexs[:, :-1]

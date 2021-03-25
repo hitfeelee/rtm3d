@@ -9,8 +9,15 @@ import torch.nn as nn
 
 
 def sigmoid_hm(hm_features):
-    x = hm_features.sigmoid_()
+    x = torch.sigmoid_(hm_features)
     x = x.clamp(min=1e-4, max=(0.9995 if x.dtype == torch.float16 else 0.9999))
+    return x
+
+
+def sigmoid_scale(features, scale=2.):
+    # x = scale*(torch.sigmoid(features) - 0.25)
+    # x = x.clamp(min=0, max=1.)
+    x = torch.sigmoid(features)
     return x
 
 

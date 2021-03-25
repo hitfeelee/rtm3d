@@ -2,6 +2,8 @@ from collections import Counter
 import torch.nn as nn
 from solver.OptimizerBuilder import *
 from fvcore.common.config import CfgNode
+from torch._six import inf
+from models.nets import module
 
 try:
     from apex.parallel import DistributedDataParallel as DDP
@@ -67,7 +69,12 @@ class Solver(nn.Module):
                                           loss_scale=self._configs.loss_scale
                                           )
         self._optimizer = optimizer
+        self._model = model
         return model
+
+    def apply_ema(self, model):
+        self._model = model
+        self.ema = module.ModelEMA(model, decay=0.9995)
 
     def load_state_dict(self, state_dict: dict):
         self._best_param_group_id = state_dict.pop('best_param_group_id') \
@@ -79,15 +86,15 @@ class Solver(nn.Module):
             cp = state_dict.pop("scheduler")
             cp = {'{}'.format(k): cp[k] for k in cp if k in ['last_epoch']}
             self.scheduler.load_state_dict(cp)
-            self.optimizer.step()
-            self.scheduler.step()
+            # self.optimizer.step()
+            # self.scheduler.step()
         if self._configs.apex and 'amp' in state_dict:
             cp = state_dict.pop('amp')
             amp.load_state_dict(cp)
 
     def state_dict(self):
         state = {
-            'best_param_group_id':self._best_param_group_id,
+            'best_param_group_id': self._best_param_group_id,
             'optimizer': self._optimizer.state_dict(),
             'scheduler': {
                 'last_epoch': self._scheduler.last_epoch
@@ -97,7 +104,7 @@ class Solver(nn.Module):
             state.update(**{'amp': amp.state_dict()})
         return state
     
-    def step(self, losses_dict):
+    def optim_step(self, losses_dict):
 
         if isinstance(losses_dict, dict):
             losses = sum(loss.mean() for loss in losses_dict.values())
@@ -111,7 +118,29 @@ class Solver(nn.Module):
                 scaled_loss.backward()
         else:
             losses.backward()
+
+        # clip_grad_norm(self._model.parameters(), 100, 2)
         self._optimizer.step()
-        # self._optimizer.zero_grad()
-        self._scheduler.step()
+        if hasattr(self, 'ema'):
+            self.ema.update(self._model)
         return losses
+
+    def scheduler_step(self):
+        self._scheduler.step()
+
+    def update_ema(self):
+        if hasattr(self, 'ema'):
+            self.ema.update_attr(self._model)
+
+
+def clip_grad_norm(parameters, max_norm, norm_type):
+    if isinstance(parameters, torch.Tensor):
+        parameters = [parameters]
+    parameters = list(filter(lambda p: p.grad is not None, parameters))
+    max_norm = float(max_norm)
+    norm_type = float(norm_type)
+    if norm_type == inf:
+        total_norm = max(p.grad.detach().abs().max() for p in parameters)
+    else:
+        total_norm = torch.norm(torch.stack([torch.norm(p.grad.detach(), norm_type) for p in parameters]), norm_type)
+    print('total norm: ', total_norm)

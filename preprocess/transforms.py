@@ -428,8 +428,8 @@ class RandomAffine2D(object):
             h = xy[:, 3] - xy[:, 1]
             area = w * h
             area0 = (bboxes[:, 2] - bboxes[:, 0]) * (bboxes[:, 3] - bboxes[:, 1])
-            ar = np.maximum(w / (h + 1e-16), h / (w + 1e-16))  # aspect ratio
-            i = (w > 2) & (h > 2) & (area / (area0 * s + 1e-16) > 0.2) & (ar < 20)
+            ar = np.maximum(w / (h + 1e-6), h / (w + 1e-6))  # aspect ratio
+            i = (w > 2) & (h > 2) & (area / (area0 * s + 1e-6) > 0.2) & (ar < 20)
             mask = targets.get_field('mask')
             mask[np.bitwise_not(i)] = 0
             bboxes[i] = xy[i]

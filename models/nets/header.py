@@ -11,14 +11,24 @@ class RTM3DHeader(nn.Module):
         _num_class = len(self._config.DATASET.OBJs)
         _num_conv = self._config.MODEL.HEADER_NUM_CONV
         _dilation = [1] + [1] * (_num_conv - 1)
+        # # main detect head
+        # self.main_kf_header = torch_utils.make_conv_level(_in_ch, _in_ch, 3, _num_conv, bias=True,
+        #                                                   dilation=_dilation)
+        # self.main_kf_header.add_module('main_kf_head', nn.Conv2d(_in_ch, _num_class, 3, padding=1, bias=True))
+        #
+        # # 3d properties # (z_off, sin(alpha), cos(alpha), h, w, l)
+        # self.regress_header = torch_utils.make_conv_level(_in_ch, _in_ch, 3, _num_conv, bias=True,
+        #                                                  dilation=_dilation)
+        # self.regress_header.add_module('regress_head', nn.Conv2d(_in_ch, 8, 3, padding=1, bias=True))
+
         # main detect head
-        self.main_kf_header = torch_utils.make_conv_level(_in_ch, _in_ch, 3, _num_conv, bias=True,
+        self.main_kf_header = torch_utils.make_convbn_level(_in_ch, _in_ch, 3, _num_conv, bias=False,
                                                           dilation=_dilation)
         self.main_kf_header.add_module('main_kf_head', nn.Conv2d(_in_ch, _num_class, 3, padding=1, bias=True))
 
         # 3d properties # (z_off, sin(alpha), cos(alpha), h, w, l)
-        self.regress_header = torch_utils.make_conv_level(_in_ch, _in_ch, 3, _num_conv, bias=True,
-                                                         dilation=_dilation)
+        self.regress_header = torch_utils.make_convbn_level(_in_ch, _in_ch, 3, _num_conv, bias=False,
+                                                          dilation=_dilation)
         self.regress_header.add_module('regress_head', nn.Conv2d(_in_ch, 8, 3, padding=1, bias=True))
 
     def forward(self, x):

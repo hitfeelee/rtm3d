@@ -16,7 +16,7 @@ from utils import ParamList
 from datasets.data.kitti.devkit_object import utils as kitti_utils
 from fvcore.common.config import CfgNode
 
-os.environ["CUDA_VISIBLE_DEVICES"] = "0"
+os.environ["CUDA_VISIBLE_DEVICES"] = "1"
 
 
 def setup(args):
@@ -28,14 +28,14 @@ def setup(args):
     opt = CfgNode(args.__dict__)
     cfg.merge_from_other_cfg(opt)
     model = model_factory.create_model(cfg)
-    dataset = DatasetReader(cfg.DATASET.PATH, cfg,
-                            augment=TestTransform(cfg.INPUT_SIZE[0]), is_training=False, split='test')
+    # dataset = DatasetReader(cfg.DATASET.PATH, cfg,
+    #                         augment=TestTransform(cfg.INPUT_SIZE[0]), is_training=False, split='test')
     dataloader, _, dr = create_dataloader(config.DATASET.PATH, cfg,
                                           transform=TestTransform(cfg.INPUT_SIZE[0]),
-                                          is_training=True, split='test')
+                                          is_training=False, split='test')
     model.to(device)
     model.eval()
-    return model, dataset, dataloader, cfg
+    return model, dr, dataloader, cfg
 
 
 def evaluate(model, dataset, dataloader, cfg):
@@ -52,8 +52,8 @@ def evaluate(model, dataset, dataloader, cfg):
     nb = len(dataloader)
     pbar = tqdm.tqdm(dataloader, total=nb)  # progress bar
     print(('\n' + '%10s' * 3) % ('mem', 'targets', 'time'))
-    # half = cfg.DEVICE.type != 'cpu'
-    half = False
+    half = cfg.DEVICE.type != 'cpu'
+    # half = False
     if half:
         model.half()
 
@@ -62,15 +62,21 @@ def evaluate(model, dataset, dataloader, cfg):
         img_ids = targets.get_field('img_id')
         Ks = targets.get_field('K')
         Bs = imgs.shape[0]
+
         NKs = [None] * Bs
+        invKs = [None] * Bs
         for i in range(Bs):
-            NKs[i] = Ks[img_ids == i][0:1, :]
-        NKs = torch.cat(NKs, dim=0)
-        NKs = NKs.to(cfg.DEVICE)
-        invKs = NKs.view(-1, 3, 3).inverse()
+            if len((img_ids == i).nonzero(as_tuple=False)) > 0:
+                NKs[i] = Ks[img_ids == i][0, :]
+                NKs[i] = NKs[i].to(cfg.DEVICE)
+                invKs[i] = NKs[i].view(-1, 3, 3).inverse()
+                if half:
+                    invKs[i] = invKs[i].half()
+                    NKs[i] = NKs[i].half()
+
         if half:
             imgs = imgs.half()
-            invKs = invKs.half()
+            # invKs = invKs.half()
         with torch.no_grad():
             t1 = time.time()
             preds = model(imgs, invKs=invKs)[0]
@@ -88,6 +94,7 @@ def evaluate(model, dataset, dataloader, cfg):
                 alphas = pred[:, 1]
                 dims = pred[:, 2:5]
                 locs = pred[:, 5:8]
+                locs[:, 1] += (dims[:, 0] / 2)
                 Rys = pred[:, 8]
                 scores = pred[:, 9]
                 Ks = dataset.Ks[index].reshape(-1, 3, 3)
@@ -97,6 +104,7 @@ def evaluate(model, dataset, dataloader, cfg):
                     results.append(l)
                 # visulal
                 if cfg.visual:
+                    locs[:, 1] -= (dims[:, 0] / 2)
                     pred_out = ParamList.ParamList((0, 0))
                     pred_out.add_field('class', clses)
                     pred_out.add_field('alpha', alphas)
@@ -118,7 +126,7 @@ def evaluate(model, dataset, dataloader, cfg):
     if cfg.visual:
         cv2.destroyAllWindows()
     print('start evaluate...')
-    mAP = kitti_utils.evaluate('./datasets/data/kitti/training/label_2', cfg.out_path)
+    mAP = kitti_utils.evaluate('datasets/data/kitti/training/label_2', cfg.out_path)
     return mAP
 
 
@@ -132,18 +140,20 @@ if __name__ == '__main__':
                         help='visualize the detection result.')
     args = parser.parse_args()
     model, dataset, dataloader, cfg = setup(args)
-    max_mAP = 25.5149
+    max_mAP = 0
     best_model = None
     out_path = cfg.out_path
-    for model_index in range(140, 141, 1):
-        # model_path = './weights_multi_gpu/RESNET-18/model_{:07d}.pt'.format(model_index)
-        model_path = 'models/pretrained/simple-smoke/RESNET-18/model_best.pt'
+    for model_index in range(600, 601, 1):
+        model_path = './weights/RESNET-34/model_{:04d}.pt'.format(model_index)
+        # model_path = 'models/pretrained/simple-smoke/RESNET-18/model_best.pt'
         cfg.DETECTOR.CHECKPOINT = model_path
         # cfg.out_path = os.path.join(out_path, str(model_index))
         cfg.out_path = os.path.join(out_path, 'best')
         if not os.path.exists(cfg.out_path):
             os.mkdir(cfg.out_path)
             os.mkdir(os.path.join(cfg.out_path, 'data'))
+        elif os.path.exists(os.path.join(cfg.out_path, 'data')):
+            os.system('rm -rf {}/*'.format(os.path.join(cfg.out_path, 'data')))
         mAP = evaluate(model, dataset, dataloader, cfg)
 
         if max_mAP < mAP:

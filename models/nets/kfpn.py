@@ -16,36 +16,29 @@ class KeypointFPNFusion(nn.Module):
         assert all((_kfns_strides[i] / _kfns_strides[i - 1]) == 2 for i in range(1, len(_kfns_strides)))
         _kfpn_levels = [int(math.log2(s)) for s in _kfns_strides]
         self._kfpn_levels = _kfpn_levels
-
-        def make_upsample(in_channels, active_fn=nn.ReLU, s=2, scale=2):
-            return nn.Sequential(*[UpSample(in_channels, s=s, scale=scale),
-                                   nn.BatchNorm2d(in_channels),
-                                   active_fn(inplace=True)])
-
         for i in range(len(_kfpn_levels) - 1, 0, -1):
-            # head = nn.Conv2d(_kfns_channels[i], _out_channels, 1, 1, bias=True)
-            head = torch_utils.make_convbn_level(_kfns_channels[i], _out_channels, 1)
+            head = nn.Conv2d(_kfns_channels[i], _out_channels, 1, 1, bias=True)
+            # head = torch_utils.make_convbn_level(_kfns_channels[i], _out_channels, 1)
             setattr(self, 'kfpn_head{}'.format(_kfpn_levels[i]), head)
-            # up = UpSample(_out_channels)
-            up = make_upsample(_out_channels, active_fn=nn.ReLU)
+            up = nn.Sequential(*[UpSample(_out_channels), nn.ReLU6(inplace=True)])
             setattr(self, 'kfpn_up{}'.format(_kfpn_levels[i]), up)
-            # proj = nn.Conv2d(_kfns_channels[i - 1] + _out_channels, _kfns_channels[i - 1], 1, 1, bias=True)
-            proj = torch_utils.make_convbn_level(_kfns_channels[i - 1] + _out_channels, _kfns_channels[i - 1], 1)
+            proj = nn.Conv2d(_kfns_channels[i - 1] + _out_channels, _kfns_channels[i - 1], 1, 1, bias=True)
+            # proj = torch_utils.make_convbn_level(_kfns_channels[i - 1] + _out_channels, _kfns_channels[i - 1], 1)
             setattr(self, 'kfpn_proj{}'.format(_kfpn_levels[i]), proj)
 
-        # head = nn.Conv2d(_kfns_channels[0], _out_channels, 1, 1, bias=True)
-        head = torch_utils.make_convbn_level(_kfns_channels[0], _out_channels, 1)
+        head = nn.Conv2d(_kfns_channels[0], _out_channels, 1, 1, bias=True)
+        # head = torch_utils.make_convbn_level(_kfns_channels[0], _out_channels, 1)
         setattr(self, 'kfpn_head{}'.format(_kfpn_levels[0]), head)
 
         _fusion_levels = [int(l - _kfpn_levels[0]) for l in _kfpn_levels]
 
         for i in range(len(_fusion_levels) - 1, 0, -1):
-            up = nn.Sequential(*[make_upsample(_out_channels, active_fn=nn.ReLU) for _ in range(_fusion_levels[i])])
-            # up.add_module('activate', nn.ReLU6(inplace=True))
+            up = nn.Sequential(*[UpSample(_out_channels) for _ in range(_fusion_levels[i])])
+            up.add_module('activate', nn.ReLU6(inplace=True))
             # up = UpSample(_out_channels, _out_channels, s=2**_fusion_levels[i])
             setattr(self, 'fusion_up{}'.format(_kfpn_levels[i]), up)
-        # up = nn.Sequential(*[nn.ReLU6(inplace=True)])
-        up = make_upsample(_out_channels, active_fn=nn.ReLU, s=1, scale=1)
+        # up = nn.Sequential(*[UpSample(_out_channels, s=1, scale=1), nn.ReLU6(inplace=True)])
+        up = nn.Sequential(*[nn.ReLU6(inplace=True)])
         setattr(self, 'fusion_up{}'.format(_kfpn_levels[0]), up)
 
     def _fpn(self, x):

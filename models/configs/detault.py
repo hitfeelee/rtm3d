@@ -6,6 +6,7 @@ CONFIGS.IS_RECT = True
 CONFIGS.IS_MOSAIC = False
 CONFIGS.BATCH_SIZE = 32
 CONFIGS.DEVICE = 'cuda'
+CONFIGS.apex = False
 
 CONFIGS.TRAINING = CfgNode(new_allowed=True)
 CONFIGS.TRAINING.LOGDIR = './logdirs/'

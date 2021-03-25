@@ -1,0 +1,39 @@
+INPUT_SIZE: (1280, 1280)
+DEVICE: 'cuda'
+BATCH_SIZE: 30
+DATASET:
+  PATH: './datasets/data/kitti'
+TRAINING:
+  CHECKPOINT_FILE: '/home/wm/.cache/torch/hub/checkpoints/resnet34-333f7ec4.pth'
+#  CHECKPOINT_FILE: '/home/wm/.cache/torch/hub/checkpoints/resnet18-5c106cde.pth'
+  CHECKPOINT_MODE: 'resume'
+  WEIGHTS: './weights'
+  W_MKF: 1.
+  W_V_OFF: 0.5
+  W_V_DIM: 1.
+  W_DEPTH: 1.
+  W_ORIENT: 1.
+MODEL:
+  BACKBONE: 'RESNET-34'
+  KFNs: ['layer1', 'layer2', 'layer3', 'layer4']
+SOLVER:
+  OPTIM_TYPE: 'adam'
+  LR_SCHEDULER_NAME: 'WarmupMultiGammaLR'
+#  BASE_LR: 0.001
+  BASE_LR: 0.001
+  STEPS: (30, 70, 110, 200,500)
+  GAMMAS: (1., 0.5, 0.2, 0.1, 0.02, 0.01) # pretraining main kf
+#  GAMMAS: (0.5, 0.2, 0.1, 0.05,0.01) # fine-tunning training all
+  WARMUP_FACTOR: 0.5
+  WARMUP_ITERS: 2
+  MAX_EPOCH: 1000
+  LOAD_SOLVER: True
+  MOMENTUM: 0.9
+#  EXCLUDE_SCOPE: ['detect_header.regress_header']
+DETECTOR:
+#  CHECKPOINT: './models/pretrained/simple-smoke/RESNET-18/model_best.pt'
+  CHECKPOINT: './weights_multi_gpu/RESNET-34/model_0000300.pt'
+  SCORE_THRESH: 0.4
+  TOPK_CANDIDATES: 100
+  DIM_REF: [[1.5256, 1.629 , 3.883], [1.76, 0.659, 0.841], [1.737, 0.595, 1.764]]
+  DEPTH_REF: [26.534, 16.038]

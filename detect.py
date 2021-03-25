@@ -26,7 +26,7 @@ def setup(args):
     cfg.merge_from_other_cfg(opt)
     device = torch.device(cfg.DEVICE) if torch.cuda.is_available() else torch.device('cpu')
     cfg.update({'DEVICE': device})
-    model = model_factory.create_model(cfg)
+    model = model_factory.create_model(cfg, is_training=False)
     dataset = DatasetReader(cfg.DATASET.PATH, cfg,
                             augment=TestTransform(cfg.INPUT_SIZE[0]), is_training=False, split='test')
     model.to(device)
@@ -51,29 +51,27 @@ def detect(model, dataset, cfg):
     # videowriter = cv2.VideoWriter('rtm3d_detect.mp4', cv2.VideoWriter.fourcc(*'mp4v'), 1, (848, 624),True)
     half = cfg.DEVICE.type != 'cpu'
     # half = False
-    # model.fuse()
     if half:
         model.half()
-    for imgs, targets, paths, _,_ in pbar:
-        src = imgs.clone().permute(1, 2, 0).contiguous().cpu().numpy()
-        src = (src * dataset._norm_params['std_rgb'] + dataset._norm_params['mean_rgb']) * 255
-        src = src.astype(np.uint8)
+    for imgs, targets, paths, _, indexs in pbar:
+        src = dataset.load_image(indexs)
         imgs = imgs.unsqueeze(dim=0).to(cfg.DEVICE)
-
-        params = ParamList.ParamList(targets.size)
+        if half:
+            imgs = imgs.half()
         img_ids = targets.get_field('img_id')
         Ks = targets.get_field('K')
         Bs = imgs.shape[0]
         NKs = [None] * Bs
+        invKs = [None] * Bs
         for i in range(Bs):
-            NKs[i] = Ks[img_ids == i][0:1, :]
-        NKs = torch.cat(NKs, dim=0)
-        NKs = NKs.to(cfg.DEVICE)
-        invKs = NKs.view(-1, 3, 3).inverse()
-        if half:
-            imgs = imgs.half()
-            invKs = invKs.half()
-            NKs = NKs.half()
+            if len((img_ids == i).nonzero(as_tuple=False)) > 0:
+                NKs[i] = Ks[img_ids == i][0, :]
+                NKs[i] = NKs[i].to(cfg.DEVICE)
+                invKs[i] = NKs[i].view(-1, 3, 3).inverse()
+                if half:
+                    invKs[i] = invKs[i].half()
+                    NKs[i] = NKs[i].half()
+
         with torch.no_grad():
             t1 = time.time()
             preds = model(imgs, invKs=invKs)[0]
@@ -86,9 +84,8 @@ def detect(model, dataset, cfg):
         bird_view = np.zeros((H, H, 3), dtype=np.uint8)
         src_bv = np.copy(bird_view)
 
-        if preds[0] is not None:
-            K = Ks[0].cpu().numpy()
-            K[:6] *= cfg.MODEL.DOWN_SAMPLE
+        if preds[0] is not None and Ks[0] is not None:
+            K = dataset.Ks[indexs].reshape(-1, 3, 3)
             pred = preds[0].cpu().numpy()
             pred_out = ParamList.ParamList((0, 0))
             pred_out.add_field('class', pred[:, 0].astype(np.int32))

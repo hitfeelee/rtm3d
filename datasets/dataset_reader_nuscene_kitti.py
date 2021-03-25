@@ -1,3 +1,4 @@
+
 from torch.utils.data import Dataset
 import numpy as np
 import random
@@ -6,10 +7,12 @@ import cv2
 import torch
 from utils.ParamList import ParamList
 from preprocess import transforms
-from datasets.data.kitti.devkit_object import utils as kitti_util
 from torch.utils.data import DataLoader
 from datasets.data.kitti.devkit_object import utils as kitti_utils
 from utils import data_utils
+import sys
+from utils import torch_utils
+import math
 
 
 class DatasetReader(Dataset):
@@ -19,8 +22,8 @@ class DatasetReader(Dataset):
         self._root = root
         self._config = config
         self._augment = augment
-        self._classes = kitti_util.name_2_label(config.DATASET.OBJs)
-        self._relate_classes = kitti_util.name_2_label(config.DATASET.RELATE_OBJs)
+        self._classes = kitti_utils.name_2_label(config.DATASET.OBJs)
+        self._relate_classes = kitti_utils.name_2_label(config.DATASET.RELATE_OBJs)
         self.is_training = is_training
         self._aug_params = {
             'hsv_h': config.DATASET.aug_hsv_h,
@@ -38,9 +41,10 @@ class DatasetReader(Dataset):
             'mean_rgb': np.array(config.DATASET.MEAN, np.float32).reshape((1, 1, 3)),
             'std_rgb': np.array(config.DATASET.STD, np.float32).reshape((1, 1, 3))
         }
-        with open(os.path.join(root, 'ImageSets', '{}.txt'.format(self._split))) as f:
+
+        with open(os.path.join(root, 'ImageSets', '{}_pure.txt'.format(self._split))) as f:
             self._image_files = f.read().splitlines()
-            self._image_files = sorted(self._image_files)
+            # self._image_files = sorted(self._image_files)
 
         label_file = os.path.join(root, 'cache', 'label_{}.npy'.format(self._split))  # saved labels in *.npy file
         self._labels = np.load(label_file, allow_pickle=True)
@@ -50,6 +54,9 @@ class DatasetReader(Dataset):
 
         sp = os.path.join(root, 'cache', 'shape_{}.npy'.format(self._split))  # shapefile path
         s = np.load(sp, allow_pickle=True)
+        self.__shapes = s
+        self._image_files, self._labels, s, self._K = self._clean_bad_data_and_shuffle(work_num=40)
+        self._samples = len(self._image_files) // config.BATCH_SIZE * config.BATCH_SIZE
         s = np.array(s).astype(dtype=np.int)
         self.__shapes = s
         if self._is_rect:
@@ -67,6 +74,62 @@ class DatasetReader(Dataset):
             transforms.ToTensor(),
             transforms.ToNCHW()
         ])
+        # self._remove_val()
+
+    def _clean_bad_data_and_shuffle(self, work_num=20):
+        classes = self._classes
+
+        def multi_thread_process(files, labels, shapes, Ks):
+            n_files = []
+            n_labels = []
+            n_shapes = []
+            n_Ks = []
+            for i, label in enumerate(labels):
+                if len(label) == 0:
+                    continue
+                if any([cls in classes for cls in label[:, 0]]):
+                    n_files.append(files[i])
+                    n_labels.append(label)
+                    n_shapes.append(shapes[i])
+                    n_Ks.append(Ks[i])
+            return n_files, n_labels, n_shapes, n_Ks
+
+        N = math.ceil(len(self._image_files) / work_num)
+        th_pools = []
+        for i in range(work_num):
+            start = i * N
+            end = min((i + 1) * N, len(self._image_files))
+            args = [self._image_files[start:end], self._labels[start:end], self.__shapes[start:end], self._K[start:end]]
+            th = torch_utils.MultiThread(i, multi_thread_process, args)
+            th_pools.append(th)
+
+        for i in range(work_num):
+            th_pools[i].start()
+        for i in range(work_num):
+            th_pools[i].join()
+
+        files = []
+        labels = []
+        shapes = []
+        Ks = []
+        for i in range(work_num):
+            f, l, s, k = th_pools[i].get_result()
+            files += f
+            labels += l
+            shapes += s
+            Ks += k
+        indices = [i for i in range(len(files))]
+        np.random.seed(200)
+        np.random.shuffle(indices)
+        return [files[i] for i in indices], [labels[i] for i in indices], \
+               [shapes[i] for i in indices], [Ks[i] for i in indices]
+
+    def _remove_val(self):
+        for f in self._image_files:
+            import os
+            path = os.path.join('./tests/tmp/best/data', '{}.txt'.format(f))
+            os.system('rm {}'.format(path))
+        print('remove success !')
 
     @property
     def labels(self):
@@ -85,7 +148,7 @@ class DatasetReader(Dataset):
         return self._image_files
 
     def __len__(self):
-        return len(self._labels)
+        return self._samples #len(self._labels)
 
     def __getitem__(self, index):
         indices = [index]
@@ -114,7 +177,6 @@ class DatasetReader(Dataset):
             target.add_field('mask', mask)
             target.add_field('noise_mask', noise_mask)
             target.add_field('K', np.repeat(K.copy().reshape(1, 9), repeats=N, axis=0))
-
             if self._augment is not None:
                 img, target = self._augment(img, targets=target, **self._aug_params)
             images.append(img)
@@ -130,16 +192,16 @@ class DatasetReader(Dataset):
         target = self._build_targets(target)
         params.update(self._norm_params)
         img, target = self._transform(img, targets=target, **params)
-        path = os.path.join(self._root, 'training', 'image_2/{}.png'.format(self._image_files[index]))
+        path = os.path.join(self._root, self._split, 'image_2/{}.png'.format(self._image_files[index]))
         return img, target, path, self.__shapes[index], index
 
     def load_image(self, index):
-        path = os.path.join(self._root, 'training', 'image_2/', '{}.png'.format(self._image_files[index]))
+        path = os.path.join(self._root, self._split, 'image_2/', '{}.png'.format(self._image_files[index]))
         img = cv2.imread(path)  # BGR
         return img
 
     def _load_calib_param(self, index):
-        path = os.path.join(self._root, 'training', 'calib/', '{}.txt'.format(self._image_files[index]))
+        path = os.path.join(self._root, self._split, 'calib/', '{}.txt'.format(self._image_files[index]))
         with open(path) as f:
             K = [line.split()[1:] for line in f.read().splitlines() if line.startswith('P2:')]
             assert len(K) > 0, 'P2 is not included in %s' % self._image_files[index]
@@ -237,9 +299,8 @@ class DatasetReader(Dataset):
                                                               locations,
                                                               Rys,
                                                               Ks.reshape(-1, 3, 3),
-                                                              xrange=(-200, self._img_size[0] + 200),
-                                                              yrange=(-200, self._img_size[1] + 200)
-                                                              )
+                                                              xrange=(-200, self._img_size[0]+200),
+                                                              yrange=(-200, self._img_size[1]+200))
         vertexs = np.ascontiguousarray(np.transpose(vertexs, axes=[0, 2, 1]))
         centers = vertexs[:, -1]
         vertexs = vertexs[:, :-1]
@@ -257,6 +318,10 @@ class DatasetReader(Dataset):
         outputs.add_field('v_coor_off', v_coor_offs)
         outputs.add_field('v_mask', v_masks)
         outputs.add_field('K', Ks)
+        # for bbox3d vertexs loss training
+        # invK = np.linalg.inv(Ks.reshape(-1, 3, 3))
+        # outputs.add_field('INVK', invK)
+
         if self._config.DATASET.GAUSSIAN_GEN_TYPE == 'dynamic_radius':
             gaussian_sigma, gaussian_radius = data_utils.dynamic_radius(bboxes)
         else:

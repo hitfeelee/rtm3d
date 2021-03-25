@@ -17,12 +17,13 @@ class RTM3DLoss(nn.Module):
         super(RTM3DLoss, self).__init__()
         self._config = config
         self._main_kf_loss = FocalLoss(config.MODEL.FOCAL_LOSS_ALPHA, config.MODEL.FOCAL_LOSS_BEDA)
-        self._vertex_kf_loss = FocalLoss(config.MODEL.FOCAL_LOSS_ALPHA, config.MODEL.FOCAL_LOSS_BEDA)
         self._gaussian_scale = (config.DATASET.GAUSSIAN_SIGMA_MAX - config.DATASET.GAUSSIAN_SIGMA_MIN) / \
                                (config.DATASET.BBOX_AREA_MAX - config.DATASET.BBOX_AREA_MIN)
         self._ref_offset_fr_main = torch.tensor([self._config.DATASET.VERTEX_OFFSET_INFER])
         self._to_abs_coords = ToAbsoluteCoords()
         self._smode_ecoder = SMOKECoder(config)
+        self._conf_loss = nn.CrossEntropyLoss()
+
         self._inited = False
 
     def test_build_main_targets(self, main_kf_logits, targets):
@@ -175,42 +176,59 @@ class RTM3DLoss(nn.Module):
         m_hm = targets.get_field('m_hm')
         m_projs = targets.get_field('m_proj').long()
         m_offs = targets.get_field('m_off')
-        ver_coor = targets.get_field('v_coor_off')
-        # vertexs = targets.get_field('vertex')
         img_id = targets.get_field('img_id').long()
         m_mask = targets.get_field('mask').bool()
         not_noise_mask = targets.get_field('noise_mask').bool().bitwise_not()
-        v_mask = targets.get_field('v_mask').bool()
 
         # main kf loss
         loss_main_kf = self._main_kf_loss(model_utils.sigmoid_hm(m_hm_pred), m_hm)
 
         # main proj offset loss
         m_valid = m_mask & not_noise_mask
-        m_off_pred = m_off_pred.permute(0, 2, 3, 1).contiguous()
-        pos_main_offset = m_off_pred[img_id[m_valid],
-                                     m_projs[m_valid][:, 1],
-                                     m_projs[m_valid][:, 0]].sigmoid()
-        loss_main_offset = F.l1_loss(pos_main_offset, m_offs[m_valid], reduction='mean')
+        if m_valid.float().sum() > 0:
+            m_off_pred = m_off_pred.permute(0, 2, 3, 1).contiguous()
+            pos_main_offset = model_utils.sigmoid_scale(m_off_pred[img_id[m_valid],
+                                                                   m_projs[m_valid][:, 1],
+                                                                   m_projs[m_valid][:, 0]])
+            loss_main_offset = F.l1_loss(pos_main_offset, m_offs[m_valid], reduction='mean')
+        else:
+            loss_main_offset = torch.zeros_like(loss_main_kf)
 
         # 3d properties loss
-        codes = self._smode_ecoder.encode_smoke_pred3d_and_targets(pred3d_logits, targets)
-        pred_dims, pred_depths, pred_orients = codes[:3]
-        gt_dims, gt_depths, gt_alphas = codes[-3:]
-        loss_dim = F.l1_loss(pred_dims, gt_dims, reduction='mean')
-        loss_depth = F.l1_loss(pred_depths, gt_depths, reduction='mean')
-        loss_orient = -1. * torch.cos(torch.atan2(pred_orients[:, 0],
-                                                 pred_orients[:, 1]) -
-                                     gt_alphas).mean() + 1.
-
+        if m_valid.float().sum() > 0:
+            codes = self._smode_ecoder.encode_smoke_pred3d_and_targets(pred3d_logits, targets)
+            pred_dims, pred_depths, pred_orients = codes[:3]
+            gt_dims, gt_depths, gt_alphas = codes[-3:]
+            loss_dim = F.l1_loss(pred_dims, gt_dims, reduction='mean')
+            loss_depth = F.l1_loss(pred_depths, gt_depths, reduction='mean')
+            loss_orient = -1. * torch.cos(torch.atan2(pred_orients[:, 0],
+                                                     pred_orients[:, 1]) -
+                                         gt_alphas).mean() + 1.
+            # codes = self._smode_ecoder.encode_smoke_pred3d_and_targets_multi_grade(pred3d_logits, targets)
+            # pred_dims, pred_depths, pred_orients = codes[:3]
+            # gt_dims, gt_depths, gt_alphas = codes[-3:]
+            # loss_dim = F.l1_loss(pred_dims, gt_dims, reduction='mean')
+            # loss_depth_conf = self._conf_loss(pred_depths[0], torch.argmax(gt_depths[0], dim=1))
+            # loss_depth = F.l1_loss(pred_depths[1], gt_depths[1], reduction='mean')
+            # loss_orient = -1. * torch.cos(torch.atan2(pred_orients[:, 0],
+            #                                           pred_orients[:, 1]) -
+            #                               gt_alphas).mean() + 1.
+        else:
+            loss_dim = torch.zeros_like(loss_main_kf)
+            # loss_depth_conf = torch.zeros_like(loss_main_kf)
+            loss_depth = torch.zeros_like(loss_main_kf)
+            loss_orient = torch.zeros_like(loss_main_kf)
         loss_main_kf *= self._config.TRAINING.W_MKF
         loss_main_offset *= self._config.TRAINING.W_M_OFF
         loss_dim *= self._config.TRAINING.W_V_DIM
+        # loss_depth_conf *= self._config.TRAINING.W_DEPTH
         loss_depth *= self._config.TRAINING.W_DEPTH
         loss_orient *= self._config.TRAINING.W_ORIENT
 
+        # loss = loss_main_kf + (loss_main_offset + loss_dim + loss_depth_conf + loss_depth + loss_orient) * 1.
         loss = loss_main_kf + (loss_main_offset + loss_dim + loss_depth + loss_orient) * 1.
         return loss, torch.tensor([loss_main_kf, loss_main_offset, loss_dim, loss_depth, loss_orient, loss],
                                   device=loss.device).detach()
+
 
 

@@ -2,17 +2,40 @@ import torch.nn as nn
 import torch
 import copy
 import math
+import torch.nn.functional as F
+from utils import torch_utils
 
 
 class UpSample(nn.Module):
-    def __init__(self, c1, c2=None, k=2):
+    def __init__(self, c1, c2=None, s=2, scale=2):
         super(UpSample, self).__init__()
+        assert scale >= 1, "scale must be more than 1."
+        # op = 0
         # o = (i - 1) * s + k - 2*p + op
+        # k = s * scale
+        # p = (k - s) // 2 = s*(scale - 1) // 2
         c2 = c2 if c2 is not None else c1
-        self.conv_tran = nn.ConvTranspose2d(c1, c2, k*2, stride=k, padding=k // 2, output_padding=0, bias=False)
+        self.conv_tran = nn.ConvTranspose2d(c1, c2, s*scale, stride=s, padding=s*(scale - 1) // 2, output_padding=0, bias=False)
 
     def forward(self, x):
         return self.conv_tran(x)
+
+
+class ConvBn(nn.Module):
+    def __init__(self, in_channels, out_channels, kernel_size=(3, 3), stride=1, padding=1, groups=1, bias=False, dilation=1):
+        super(ConvBn, self).__init__()
+        self.conv_bn = nn.Sequential()
+        self.conv_bn.add_module('conv', nn.Conv2d(in_channels=in_channels, out_channels=out_channels,
+                                                  kernel_size=kernel_size, stride=stride, padding=padding,
+                                                  groups=groups, bias=bias, dilation=dilation))
+        self.conv_bn.add_module('bn', nn.BatchNorm2d(num_features=out_channels))
+
+    def forward(self, x):
+        # if x.dtype == torch.float16:
+        #     x = self.conv_bn.conv(x)
+        #     x = torch.clamp(x, min=-torch_utils.hinf, max=torch_utils.hinf)
+        #     return self.conv_bn.bn(x)
+        return self.conv_bn(x)
 
 
 class FocalLoss1(nn.Module):

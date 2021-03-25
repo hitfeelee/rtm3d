@@ -3,7 +3,7 @@ from typing import Any, Dict, List
 import torch
 
 
-from .lr_scheduler import WarmupCosineLR, WarmupMultiStepLR
+from .lr_scheduler import WarmupCosineLR, WarmupMultiStepLR, WarmupMultiGammaLR
 
 
 def build_optimizer(cfg, model: torch.nn.Module) -> torch.optim.Optimizer:
@@ -31,8 +31,11 @@ def build_optimizer(cfg, model: torch.nn.Module) -> torch.optim.Optimizer:
         print(key)
         params += [{"params": [value], "lr": lr, "weight_decay": weight_decay}]
 
-    # optimizer = torch.optim.SGD(params, lr, momentum=cfg.SOLVER.MOMENTUM)
-    optimizer = torch.optim.AdamW(params, lr=lr, weight_decay=1.e-4)
+    if cfg.SOLVER.OPTIM_TYPE == 'sgd':
+        optimizer = torch.optim.SGD(params, lr, momentum=cfg.SOLVER.MOMENTUM)
+    else:
+        optimizer = torch.optim.AdamW(params, lr=lr, weight_decay=1.e-3 if cfg.apex else 1.e-4,
+                                      eps=1.e-4 if cfg.apex else 1.e-8)
     return optimizer
 
 
@@ -48,6 +51,15 @@ def build_lr_scheduler(
             optimizer,
             cfg.SOLVER.STEPS,
             cfg.SOLVER.GAMMA,
+            warmup_factor=cfg.SOLVER.WARMUP_FACTOR,
+            warmup_iters=cfg.SOLVER.WARMUP_ITERS,
+            warmup_method=cfg.SOLVER.WARMUP_METHOD,
+        )
+    elif name == "WarmupMultiGammaLR":
+        return WarmupMultiGammaLR(
+            optimizer,
+            cfg.SOLVER.STEPS,
+            cfg.SOLVER.GAMMAS,
             warmup_factor=cfg.SOLVER.WARMUP_FACTOR,
             warmup_iters=cfg.SOLVER.WARMUP_ITERS,
             warmup_method=cfg.SOLVER.WARMUP_METHOD,

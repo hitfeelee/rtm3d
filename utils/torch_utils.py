@@ -10,7 +10,9 @@ import torch.nn.functional as F
 import torchvision.models as models
 import torch.distributed as dist
 import threading
+from models.nets.module import ConvBn
 
+hinf = 65504.
 
 def init_seeds(seed=0):
     torch.manual_seed(seed)
@@ -73,6 +75,8 @@ def initialize_weights(model):
         t = type(m)
         if t is nn.Conv2d:
             nn.init.xavier_uniform_(m.weight)
+            if m.bias is not None:
+                nn.init.constant_(m.bias, 0)
             pass  # nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
         elif t is nn.ConvTranspose2d:
             _fill_up_weights(m)
@@ -214,6 +218,30 @@ def make_conv_level(in_channels, out_channels, kernel_size=3, num_convs=1, norm_
                       stride=s,
                       padding=padding, bias=bias, dilation=dilation[i]),
             norm_func(out_channels[i]),
+            nn.ReLU6(inplace=True)])
+
+    return nn.Sequential(*modules)
+
+
+def make_convbn_level(in_channels, out_channels, kernel_size=3, num_convs=1,
+                     stride=1, dilation=1, bias=False):
+    """
+    make conv layers based on its number.
+    """
+    modules = []
+    if isinstance(kernel_size, int):
+        kernel_size = [kernel_size] * num_convs
+    if isinstance(out_channels, int):
+        out_channels = [in_channels] * (num_convs - 1) + [out_channels]
+    if isinstance(dilation, int):
+        dilation = [dilation] * num_convs
+
+    for i in range(num_convs):
+        s = stride if i == 0 else 1
+        padding = (kernel_size[i] - 1) * dilation[i] // 2
+        modules.extend([
+            ConvBn(in_channels, out_channels[i], kernel_size=kernel_size[i],
+                   stride=s, padding=padding, bias=bias, dilation=dilation[i]),
             nn.ReLU(inplace=True)])
 
     return nn.Sequential(*modules)
@@ -226,7 +254,7 @@ def reduce_tensor(tensor, world_size):
     return rt
 
 
-class myThread (threading.Thread):
+class MultiThread (threading.Thread):
     def __init__(self, threadID, callback, args):
         threading.Thread.__init__(self)
         self.threadID = threadID
@@ -253,7 +281,7 @@ def multi_thread_to_device(tensor, device, nw=4):
     for i in range(nw):
         start = i * N
         end = min((i + 1) * N, len(tensor))
-        th = myThread(i, worker, [tensor[start:end], device])
+        th = MultiThread(i, worker, [tensor[start:end], device])
         th_pools.append(th)
 
     for i in range(nw):
@@ -265,3 +293,22 @@ def multi_thread_to_device(tensor, device, nw=4):
         sub_tensor = th_pools[i].get_result()
         res.append(sub_tensor)
     return torch.cat(res, dim=0) if len(res) > 1 else res[0]
+
+
+def fast_norm(x, dim=0, eps=1.e-6):
+    sum_x = x.sum(dim=dim, keepdim=True) + eps
+    return x/sum_x
+
+
+class Average(object):
+    def __init__(self, tensor):
+        self._sum = tensor
+        self._count = 0
+
+    def update(self, tensor):
+        self._sum += tensor
+        self._count += 1
+
+    @property
+    def value(self):
+        return self._sum / max(1, self._count)
