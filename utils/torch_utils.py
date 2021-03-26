@@ -218,7 +218,7 @@ def make_conv_level(in_channels, out_channels, kernel_size=3, num_convs=1, norm_
                       stride=s,
                       padding=padding, bias=bias, dilation=dilation[i]),
             norm_func(out_channels[i]),
-            nn.ReLU6(inplace=True)])
+            nn.ReLU(inplace=True)])
 
     return nn.Sequential(*modules)
 

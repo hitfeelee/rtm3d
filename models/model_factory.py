@@ -22,7 +22,8 @@ from models.configs.detault import CONFIGS as configs
 try:
     from apex.parallel import DistributedDataParallel as DDP
 except ImportError:
-    raise ImportError("Please install apex from https://www.github.com/nvidia/apex to run this example.")
+    # raise ImportError("Please install apex from https://www.github.com/nvidia/apex to run this example.")
+    print("Not found apex module.")
 
 
 def create_model(configs, is_training=True):
@@ -98,7 +99,7 @@ import time
 if __name__ == '__main__':
     import argparse
     from fvcore.common.config import CfgNode
-    from torchsummary import summary
+    # from torchsummary import summary
 
     parser = argparse.ArgumentParser(description='RTM3D Implementation')
     parser.add_argument('--config', type=str, default='./models/configs/rtm3d_resnet18_kitti.yaml', metavar='ARCH',

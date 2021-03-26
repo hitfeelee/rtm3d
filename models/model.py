@@ -53,7 +53,7 @@ class Model(nn.Module):
             # m_projs_i *= self.config.MODEL.DOWN_SAMPLE  # (N, 2)
 
             result = torch.cat([
-                clses_i.view(-1, 1), pred_alpha_i.view(-1, 1), pred_dims_i, pred_locs_i,
+                clses_i.view(-1, 1).type_as(pred_alpha_i), pred_alpha_i.view(-1, 1), pred_dims_i, pred_locs_i,
                 pred_rys_i.view(-1, 1), m_scores_i.view(-1, 1)
             ], dim=1)
             results[i] = result

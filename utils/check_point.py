@@ -176,7 +176,7 @@ class CheckPointer(object):
 
     def _load_file(self, f):
         fm = (lambda storage, loc: storage) if self.device.type == 'cpu' else (lambda storage, loc: storage.cuda(self.device))
-        return torch.load(f)
+        return torch.load(f) if self.device.type != 'cpu' else torch.load(f, map_location=self.device)
 
     def _load_model(self, checkpoint):
         load_state_dict(self.model, checkpoint["model"] if 'model' in checkpoint else checkpoint)

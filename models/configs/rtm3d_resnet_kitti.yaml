@@ -1,8 +1,8 @@
 INPUT_SIZE: (1280, 1280)
 DEVICE: 'cuda'
 BATCH_SIZE: 64
-#DATASET:
-#  PATH: './datasets/data/kitti/tracking'
+DATASET:
+  PATH: './datasets/data/kitti/tracking'
 TRAINING:
 #  CHECKPOINT_FILE: '/home/wm/.cache/torch/hub/checkpoints/resnet34-333f7ec4.pth'
   CHECKPOINT_FILE: '/home/wm/.cache/torch/hub/checkpoints/resnet18-5c106cde.pth'

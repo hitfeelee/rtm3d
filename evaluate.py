@@ -144,8 +144,8 @@ if __name__ == '__main__':
     best_model = None
     out_path = cfg.out_path
     for model_index in range(600, 601, 1):
-        model_path = './weights/RESNET-34/model_{:04d}.pt'.format(model_index)
-        # model_path = 'models/pretrained/simple-smoke/RESNET-18/model_best.pt'
+        # model_path = './weights/RESNET-34/model_{:04d}.pt'.format(model_index)
+        model_path = './models/pretrained/simple-smoke/RESNET-18/model_best.pt'
         cfg.DETECTOR.CHECKPOINT = model_path
         # cfg.out_path = os.path.join(out_path, str(model_index))
         cfg.out_path = os.path.join(out_path, 'best')
